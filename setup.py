@@ -13,11 +13,11 @@ setup(
     keywords='s3 web testing',
 
     install_requires=[
-        'boto >=2.0b4',
+        'boto3 >=1.0.0',
         'PyYAML',
         'bunch >=1.0.0',
         'gevent >=1.0',
-        'isodate >=0.4.4',
+        'isodate ==0.4.4',
         ],
 
     entry_points={
