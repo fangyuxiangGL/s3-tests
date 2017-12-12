@@ -1,10 +1,15 @@
 import boto3
 from botocore.exceptions import ClientError
+from botocore.exceptions import ParamValidationError
 from nose.tools import eq_ as eq
 from nose.plugins.attrib import attr
 import isodate
 import email.utils
 import datetime
+import threading
+import re
+import botocore.session
+import pytz
 
 from .utils import assert_raises
 
@@ -578,20 +583,39 @@ def test_bucket_list_maxkeys_none():
     eq(keys, key_names)
     eq(response['MaxKeys'], 1000)
 
-#@attr(resource='bucket')
-#@attr(method='get')
-#@attr(operation='list all keys')
-#@attr(assertion='invalid max_keys')
-#def test_bucket_list_maxkeys_invalid():
-    # TODO: THIS TEST
+def _get_status_and_error_code(response):
+    status = response['ResponseMetadata']['HTTPStatusCode']
+    error_code = response['Error']['Code']
+    return status, error_code
 
-#@attr('fails_on_rgw')
-#@attr(resource='bucket')
-#@attr(method='get')
-#@attr(operation='list all keys')
-#@attr(assertion='non-printing max_keys')
-#def test_bucket_list_maxkeys_unreadable():
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all keys')
+@attr(assertion='invalid max_keys')
+def test_bucket_list_maxkeys_invalid():
     # TODO: THIS TEST
+    key_names = ['bar', 'baz', 'foo', 'quxx']
+    bucket_name = _create_objects(keys=key_names)
+    client = get_client()
+
+    e = assert_raises(ParamValidationError, client.list_objects, Bucket=bucket_name, MaxKeys='blah')
+    
+    #status, error_code = _get_status_and_error_code(e.response)
+    #eq(status, 400)
+    #eq(error_code, 'InvalidArgument')
+
+@attr('fails_on_rgw')
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all keys')
+@attr(assertion='non-printing max_keys')
+def test_bucket_list_maxkeys_unreadable():
+    # TODO: THIS TEST
+    key_names = ['bar', 'baz', 'foo', 'quxx']
+    bucket_name = _create_objects(keys=key_names)
+    client = get_client()
+
+    e = assert_raises(ParamValidationError, client.list_objects, Bucket=bucket_name, MaxKeys='\x0a')
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -664,6 +688,7 @@ def test_bucket_list_marker_after_list():
     eq(response['IsTruncated'], False)
     eq(keys, [])
 
+# TODO: SEE IF I STILL NEED THIS
 def compare_date(iso_datetime, http_datetime):
     iso_datetime=str(iso_datetime)
     http_datetime=str(http_datetime)
@@ -757,7 +782,6 @@ def test_bucket_list_return_data_versioning():
     check_configure_versioning_retry(bucket_name, True, "Enabled")
     key_names = ['bar', 'baz', 'foo']
     bucket_name = _create_objects(bucket=bucket,bucket_name=bucket_name,keys=key_names)
-    #boto3.set_stream_logger()
 
     client = get_client()
     data = {}
@@ -810,19 +834,305 @@ def test_bucket_list_objects_anonymous():
 def test_bucket_list_objects_anonymous_fail():
     bucket_name = get_new_bucket_name() 
     get_new_bucket(name=bucket_name)
-    #client = get_client()
-    #client.put_bucket_acl(Bucket=bucket_name, ACL='public-read')
 
     anon_client = get_anon_client()
+    #anon_client.list_objects(Bucket=bucket_name)
     e = assert_raises(ClientError, anon_client.list_objects, Bucket=bucket_name)
 
-    s3 = get_anon_resource()
-    bucket = s3.Bucket(bucket_name)
-    #conn = _create_connection_bad_auth()
-    #conn._auth_handler = AnonymousAuth.AnonymousAuthHandler(None, None, None) # Doesn't need this
-    #bucket = get_new_bucket()
-    #e = assert_raises(boto.exception.S3ResponseError, conn.get_bucket, bucket.name)
-    #eq(e.status, 403)
-    #eq(e.reason, 'Forbidden')
-    #eq(e.error_code, 'AccessDenied')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'AccessDenied')
 
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='non-existant bucket')
+@attr(assertion='fails 404')
+def test_bucket_notexist():
+    # TODO: see if something other than list_objects would work for this
+    bucket_name = get_new_bucket_name() 
+    client = get_client()
+
+    e = assert_raises(ClientError, client.list_objects, Bucket=bucket_name)
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+@attr(resource='bucket')
+@attr(method='delete')
+@attr(operation='non-existant bucket')
+@attr(assertion='fails 404')
+def test_bucket_delete_notexist():
+    bucket_name = get_new_bucket_name() 
+    client = get_client()
+
+    e = assert_raises(ClientError, client.delete_bucket, Bucket=bucket_name)
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+@attr(resource='bucket')
+@attr(method='delete')
+@attr(operation='non-empty bucket')
+@attr(assertion='fails 409')
+def test_bucket_delete_nonempty():
+    key_names = ['foo']
+    bucket_name = _create_objects(keys=key_names)
+    client = get_client()
+
+    e = assert_raises(ClientError, client.delete_bucket, Bucket=bucket_name)
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 409)
+    eq(error_code, 'BucketNotEmpty')
+
+def _do_set_bucket_canned_acl(client, bucket_name, canned_acl, i, results):
+    try:
+        client.put_bucket_acl(ACL=canned_acl, Bucket=bucket_name)
+        results[i] = True
+    except:
+        results[i] = False
+
+def _do_set_bucket_canned_acl_concurrent(client, bucket_name, canned_acl, num, results):
+    t = []
+    for i in range(num):
+        thr = threading.Thread(target = _do_set_bucket_canned_acl, args=(client, bucket_name, canned_acl, i, results))
+        thr.start()
+        t.append(thr)
+    return t
+
+def _do_wait_completion(t):
+    for thr in t:
+        thr.join()
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='concurrent set of acls on a bucket')
+@attr(assertion='works')
+def test_bucket_concurrent_set_canned_acl():
+    # TODO see what num_threads needs to be set to
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    num_threads = 50 # boto retry defaults to 5 so we need a thread to fail at least 5 times
+                     # this seems like a large enough number to get through retry (if bug
+                     # exists)
+    results = [None] * num_threads
+
+    t = _do_set_bucket_canned_acl_concurrent(client, bucket_name, 'public-read', num_threads, results)
+    _do_wait_completion(t)
+
+    for r in results:
+        eq(r, True)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='non-existant bucket')
+@attr(assertion='fails 404')
+def test_object_write_to_nonexist_bucket():
+    key_names = ['foo']
+    bucket_name = 'whatchutalkinboutwillis'
+    client = get_client()
+
+    e = assert_raises(ClientError, client.put_object, Bucket=bucket_name, Key='foo', Body='foo')
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+
+@attr(resource='bucket')
+@attr(method='del')
+@attr(operation='deleted bucket')
+@attr(assertion='fails 404')
+def test_bucket_create_delete():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.delete_bucket(Bucket=bucket_name)
+
+    e = assert_raises(ClientError, client.delete_bucket, Bucket=bucket_name)
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='read contents that were never written')
+@attr(assertion='fails 404')
+def test_object_read_notexist():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='bar')
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchKey')
+
+http_response = None
+
+def get_http_response(**kwargs):
+    global http_response 
+    http_response = kwargs['http_response'].__dict__
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='read contents that were never written to raise one error response')
+@attr(assertion='RequestId appears in the error response')
+def test_object_requestid_matches_header_on_error():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    # get http response after failed request
+    client.meta.events.register('after-call.s3.GetObject', get_http_response)
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='bar')
+    response_body = http_response['_content']
+    request_id = re.search(r'<RequestId>(.*)</RequestId>', response_body.encode('utf-8')).group(1)
+    assert request_id is not None
+    eq(request_id, e.response['ResponseMetadata']['RequestId'])
+
+def _make_objs_dict(key_names):
+    objs_list = []
+    for key in key_names:
+        obj_dict = {'Key': key}
+        objs_list.append(obj_dict)
+    objs_dict = {'Objects': objs_list}
+    return objs_dict
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='delete multiple objects')
+@attr(assertion='deletes multiple objects with a single call')
+def test_multi_object_delete():
+    key_names = ['key0', 'key1', 'key2']
+    bucket_name = _create_objects(keys=key_names)
+    client = get_client()
+    response = client.list_objects(Bucket=bucket_name)
+    eq(len(response['Contents']), 3)
+    
+    objs_dict = _make_objs_dict(key_names=key_names)
+    response = client.delete_objects(Bucket=bucket_name, Delete=objs_dict) 
+
+    eq(len(response['Deleted']), 3)
+    assert 'Errors' not in response
+    response = client.list_objects(Bucket=bucket_name)
+    assert 'Contents' not in response
+
+    response = client.delete_objects(Bucket=bucket_name, Delete=objs_dict) 
+    eq(len(response['Deleted']), 3)
+    assert 'Errors' not in response
+    response = client.list_objects(Bucket=bucket_name)
+    assert 'Contents' not in response
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='write zero-byte key')
+@attr(assertion='correct content length')
+def test_object_head_zero_bytes():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='')
+
+    response = client.head_object(Bucket=bucket_name, Key='foo')
+    eq(response['ContentLength'], 0)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='write key')
+@attr(assertion='correct etag')
+def test_object_write_check_etag():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    response = client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+    eq(response['ETag'], '"37b51d194a7513e45b56f6524f2d51f2"')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='write key')
+@attr(assertion='correct cache control header')
+def test_object_write_cache_control():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    cache_control = 'public, max-age=14400'
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar', CacheControl=cache_control)
+
+    response = client.head_object(Bucket=bucket_name, Key='foo')
+    eq(response['ResponseMetadata']['HTTPHeaders']['cache-control'], cache_control)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='write key')
+@attr(assertion='correct expires header')
+def test_object_write_expires():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar', Expires=expires)
+
+    response = client.head_object(Bucket=bucket_name, Key='foo')
+    _compare_dates(expires, response['Expires'])
+
+@attr(resource='object')
+@attr(method='all')
+@attr(operation='complete object life cycle')
+@attr(assertion='read back what we wrote and rewrote')
+def test_object_write_read_update_read_delete():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    # Write
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    # Read
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    got = body.read()
+    eq(got, 'bar')
+    # Update
+    client.put_object(Bucket=bucket_name, Key='foo', Body='soup')
+    # Read
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    got = body.read()
+    eq(got, 'soup')
+    # Delete
+    client.delete_object(Bucket=bucket_name, Key='foo')
+
+def _set_get_metadata(metadata, bucket_name=None):
+    """
+    create a new bucket new or use an existing
+    name to create an object that bucket,
+    set the meta1 property to a specified, value,
+    and then re-read and return that property
+    """
+    if bucket_name is None:
+        bucket_name = get_new_bucket_name()
+        get_new_bucket(name=bucket_name)
+
+    client = get_client()
+    metadata_dict = {'meta1': metadata}
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar', Metadata=metadata_dict)
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    return response['Metadata']['meta1']
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write/re-read')
+@attr(assertion='reread what we wrote')
+def test_object_set_get_metadata_none_to_good():
+    got = _set_get_metadata('mymeta')
+    eq(got, 'mymeta')
