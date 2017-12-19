@@ -142,6 +142,7 @@ def setup():
     config.port = int(defaults.get("port"))
     config.access_key = defaults.get("access_key")
     config.secret_key = defaults.get("secret_key")
+    config.is_secure = defaults.get("is_secure")
 
     try:
         template = defaults.get("bucket_prefix")
@@ -162,7 +163,7 @@ def get_client(session=boto3):
                         aws_access_key_id=config.access_key,
                         aws_secret_access_key=config.secret_key,
                         endpoint_url=endpoint_url,
-                        use_ssl=False,
+                        use_ssl=config.is_secure,
                         verify=False)
     return client
 
@@ -224,3 +225,18 @@ def get_new_bucket(session=boto3, name=None, headers=None):
     bucket = s3.Bucket(name)
     bucket_location = bucket.create()
     return bucket
+
+def get_config_is_secure():
+    return config.is_secure
+
+def get_config_host():
+    return config.host
+
+def get_config_port():
+    return config.port
+
+def get_config_aws_access_key():
+    return config.access_key
+
+def get_config_aws_secret_key():
+    return config.secret_key

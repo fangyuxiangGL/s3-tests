@@ -10,6 +10,17 @@ import threading
 import re
 import botocore.session
 import pytz
+from cStringIO import StringIO
+from ordereddict import OrderedDict
+import requests
+import json
+import base64
+import hmac
+import sha
+import xml.etree.ElementTree as ET
+import time
+
+from email.header import decode_header
 
 from .utils import assert_raises
 
@@ -19,6 +30,11 @@ from . import (
     get_anon_resource,
     get_new_bucket,
     get_new_bucket_name,
+    get_config_is_secure,
+    get_config_host,
+    get_config_port,
+    get_config_aws_access_key,
+    get_config_aws_secret_key,
     )
 
 def _bucket_is_empty(bucket):
@@ -593,29 +609,51 @@ def _get_status_and_error_code(response):
 @attr(operation='list all keys')
 @attr(assertion='invalid max_keys')
 def test_bucket_list_maxkeys_invalid():
-    # TODO: THIS TEST
     key_names = ['bar', 'baz', 'foo', 'quxx']
     bucket_name = _create_objects(keys=key_names)
     client = get_client()
 
-    e = assert_raises(ParamValidationError, client.list_objects, Bucket=bucket_name, MaxKeys='blah')
-    
+    # adds invalid max keys to url
+    # before list_objects is called
+    def add_invalid_maxkeys(**kwargs):
+        kwargs['params']['url'] += "&max-keys=blah"
+    client.meta.events.register('before-call.s3.ListObjects', add_invalid_maxkeys)
+
+    e = assert_raises(ClientError, client.list_objects, Bucket=bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'InvalidArgument')
+
+#@attr('fails_on_rgw')
+#@attr(resource='bucket')
+#@attr(method='get')
+#@attr(operation='list all keys')
+#@attr(assertion='non-printing max_keys')
+#def test_bucket_list_maxkeys_unreadable():
+    #TODO: Remove this test and document it 
+    # Boto3 is url encoding the string before it is ever sent out
+    # thus this test should be removed, because the unreadable string
+    # never makes it to the server
+    #key_names = ['bar', 'baz', 'foo', 'quxx']
+    #bucket_name = _create_objects(keys=key_names)
+    #client = get_client()
+
+    # adds unreadable max keys to url
+    # before list_objects is called
+    #def add_unreadable_maxkeys(**kwargs):
+        #kwargs['params']['url'] += "&max-keys=%0A"
+    #client.meta.events.register('before-call.s3.ListObjects', add_unreadable_maxkeys)
+
+    #e = assert_raises(ClientError, client.list_objects, Bucket=bucket_name)
     #status, error_code = _get_status_and_error_code(e.response)
-    #eq(status, 400)
-    #eq(error_code, 'InvalidArgument')
+    # COMMENT FROM BOTO2 TEST:
+    # some proxies vary the case
+    # Weird because you can clearly see an InvalidArgument error code. What's
+    # also funny is the Amazon tells us that it's not an interger or within an
+    # integer range. Is 'blah' in the integer range?
+    #eq(status, 403)
+    #eq(error_code, 'SignatureDoesNotMatch')
 
-@attr('fails_on_rgw')
-@attr(resource='bucket')
-@attr(method='get')
-@attr(operation='list all keys')
-@attr(assertion='non-printing max_keys')
-def test_bucket_list_maxkeys_unreadable():
-    # TODO: THIS TEST
-    key_names = ['bar', 'baz', 'foo', 'quxx']
-    bucket_name = _create_objects(keys=key_names)
-    client = get_client()
-
-    e = assert_raises(ParamValidationError, client.list_objects, Bucket=bucket_name, MaxKeys='\x0a')
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -688,15 +726,6 @@ def test_bucket_list_marker_after_list():
     eq(response['IsTruncated'], False)
     eq(keys, [])
 
-# TODO: SEE IF I STILL NEED THIS
-def compare_date(iso_datetime, http_datetime):
-    iso_datetime=str(iso_datetime)
-    http_datetime=str(http_datetime)
-    date1 = iso_datetime.split(".")
-    date2 = iso_datetime.split("+")
-    iso_datetime = date1[0] + "+" + date2[1]
-    eq(iso_datetime, http_datetime)
-
 def _compare_dates(datetime1, datetime2):
     """
     changes ms from datetime1 to 0, compares it to datetime2
@@ -726,8 +755,6 @@ def test_bucket_list_return_data():
                 'ETag': obj_response['ETag'],
                 'LastModified': obj_response['LastModified'],
                 'ContentLength': obj_response['ContentLength'],
-                # TODO: ASK CASEY WHY THIS ISNT COMING OUT
-                #'ContentEncoding': obj_response['ContentEncoding'],
                 }
             })
 
@@ -741,8 +768,6 @@ def test_bucket_list_return_data():
         eq(obj['Owner']['DisplayName'],key_data['DisplayName'])
         eq(obj['Owner']['ID'],key_data['ID'])
         _compare_dates(obj['LastModified'],key_data['LastModified'])
-        # As of Boto3 v1.4.8 list_objects does not return ContentEncoding 
-        # in the metadata about each object returned
 
 # amazon is eventual consistent, retry a bit if failed
 def check_configure_versioning_retry(bucket_name, status, expected_string):
@@ -796,7 +821,6 @@ def test_bucket_list_return_data_versioning():
                 'ETag': obj_response['ETag'],
                 'LastModified': obj_response['LastModified'],
                 'ContentLength': obj_response['ContentLength'],
-                #TODO: FIGURE OUT WHY THIS STILL ISN'T COMING OUT
                 'VersionId': obj_response['VersionId']
                 }
             })
@@ -848,7 +872,6 @@ def test_bucket_list_objects_anonymous_fail():
 @attr(operation='non-existant bucket')
 @attr(assertion='fails 404')
 def test_bucket_notexist():
-    # TODO: see if something other than list_objects would work for this
     bucket_name = get_new_bucket_name() 
     client = get_client()
 
@@ -911,12 +934,11 @@ def _do_wait_completion(t):
 @attr(operation='concurrent set of acls on a bucket')
 @attr(assertion='works')
 def test_bucket_concurrent_set_canned_acl():
-    # TODO see what num_threads needs to be set to
     bucket_name = get_new_bucket_name()
     get_new_bucket(name=bucket_name)
     client = get_client()
 
-    num_threads = 50 # boto retry defaults to 5 so we need a thread to fail at least 5 times
+    num_threads = 50 # boto2 retry defaults to 5 so we need a thread to fail at least 5 times
                      # this seems like a large enough number to get through retry (if bug
                      # exists)
     results = [None] * num_threads
@@ -1136,3 +1158,1668 @@ def _set_get_metadata(metadata, bucket_name=None):
 def test_object_set_get_metadata_none_to_good():
     got = _set_get_metadata('mymeta')
     eq(got, 'mymeta')
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write/re-read')
+@attr(assertion='write empty value, returns empty value')
+def test_object_set_get_metadata_none_to_empty():
+    got = _set_get_metadata('')
+    eq(got, '')
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write/re-write')
+@attr(assertion='empty value replaces old')
+def test_object_set_get_metadata_overwrite_to_empty():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    got = _set_get_metadata('oldmeta', bucket_name)
+    eq(got, 'oldmeta')
+    got = _set_get_metadata('', bucket_name)
+    eq(got, '')
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write/re-write')
+@attr(assertion='UTF-8 values passed through')
+def test_object_set_get_unicode_metadata():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    def set_unicode_metadata(**kwargs):
+        kwargs['params']['headers']['x-amz-meta-meta1'] = u"Hello World\xe9"
+
+    client.meta.events.register('before-call.s3.PutObject', set_unicode_metadata)
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    got = response['Metadata']['meta1'].decode('utf-8')
+    eq(got, u"Hello World\xe9")
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write/re-write')
+@attr(assertion='non-UTF-8 values detected, but preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_non_utf8_metadata():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    metadata_dict = {'meta1': '\x04mymeta'}
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar', Metadata=metadata_dict)
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    got = response['Metadata']['meta1']
+    eq(got, '=?UTF-8?Q?=04mymeta?=')
+
+def _set_get_metadata_unreadable(metadata, bucket_name=None):
+    """
+    set and then read back a meta-data value (which presumably
+    includes some interesting characters), and return a list
+    containing the stored value AND the encoding with which it
+    was returned.
+    """
+    got = _set_get_metadata(metadata, bucket_name)
+    got = decode_header(got)
+    return got
+
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write')
+@attr(assertion='non-priting prefixes noted and preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_metadata_empty_to_unreadable_prefix():
+    metadata = '\x04w'
+    got = _set_get_metadata_unreadable(metadata)
+    eq(got, [(metadata, 'utf-8')])
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write')
+@attr(assertion='non-priting suffixes noted and preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_metadata_empty_to_unreadable_suffix():
+    metadata = 'h\x04'
+    got = _set_get_metadata_unreadable(metadata)
+    eq(got, [(metadata, 'utf-8')])
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata write')
+@attr(assertion='non-priting in-fixes noted and preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_metadata_empty_to_unreadable_infix():
+    metadata = 'h\x04w'
+    got = _set_get_metadata_unreadable(metadata)
+    eq(got, [(metadata, 'utf-8')])
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata re-write')
+@attr(assertion='non-priting prefixes noted and preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_metadata_overwrite_to_unreadable_prefix():
+    metadata = '\x04w'
+    got = _set_get_metadata_unreadable(metadata)
+    eq(got, [(metadata, 'utf-8')])
+    metadata2 = '\x05w'
+    got2 = _set_get_metadata_unreadable(metadata2)
+    eq(got2, [(metadata2, 'utf-8')])
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata re-write')
+@attr(assertion='non-priting suffixes noted and preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_metadata_overwrite_to_unreadable_suffix():
+    metadata = 'h\x04'
+    got = _set_get_metadata_unreadable(metadata)
+    eq(got, [(metadata, 'utf-8')])
+    metadata2 = 'h\x05'
+    got2 = _set_get_metadata_unreadable(metadata2)
+    eq(got2, [(metadata2, 'utf-8')])
+
+@attr(resource='object.metadata')
+@attr(method='put')
+@attr(operation='metadata re-write')
+@attr(assertion='non-priting in-fixes noted and preserved')
+@attr('fails_strict_rfc2616')
+def test_object_set_get_metadata_overwrite_to_unreadable_infix():
+    metadata = 'h\x04w'
+    got = _set_get_metadata_unreadable(metadata)
+    eq(got, [(metadata, 'utf-8')])
+    metadata2 = 'h\x05w'
+    got2 = _set_get_metadata_unreadable(metadata2)
+    eq(got2, [(metadata2, 'utf-8')])
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='data re-write')
+@attr(assertion='replaces previous metadata')
+def test_object_metadata_replaced_on_put():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    metadata_dict = {'meta1': 'bar'}
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar', Metadata=metadata_dict)
+
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    got = response['Metadata']
+    eq(got, {})
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='data write from file (w/100-Continue)')
+@attr(assertion='succeeds and returns written data')
+def test_object_write_file():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    data = StringIO('bar')
+    client.put_object(Bucket=bucket_name, Key='foo', Body=data)
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+def _get_post_url(bucket_name):
+    is_secure = get_config_is_secure()
+    if is_secure == True:
+        protocol='https'
+    else:
+        protocol='http'
+
+    host = get_config_host()
+    port = get_config_port()
+
+    url = '{protocol}://{host}:{port}/{bucket_name}'.format(protocol=protocol,\
+                host=host, port=port, bucket_name=bucket_name)
+    return url
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='anonymous browser based upload via POST request')
+@attr(assertion='succeeds and returns written data')
+def test_post_object_anonymous_request():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    url = _get_post_url(bucket_name)
+    payload = OrderedDict([("key" , "foo.txt"),("acl" , "public-read"),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    client.create_bucket(ACL='public-read-write', Bucket=bucket_name)
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    response = client.get_object(Bucket=bucket_name, Key='foo.txt')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds and returns written data')
+def test_post_object_authenticated_request():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    response = client.get_object(Bucket=bucket_name, Key='foo.txt')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request, bad access key')
+@attr(assertion='fails')
+def test_post_object_authenticated_request_bad_access_key():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read-write', Bucket=bucket_name)
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , 'foo'),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='anonymous browser based upload via POST request')
+@attr(assertion='succeeds with status 201')
+def test_post_object_set_success_code():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read-write', Bucket=bucket_name)
+
+    url = _get_post_url(bucket_name)
+    payload = OrderedDict([("key" , "foo.txt"),("acl" , "public-read"),\
+    ("success_action_status" , "201"),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 201)
+    message = ET.fromstring(r.content).find('Key')
+    eq(message.text,'foo.txt')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='anonymous browser based upload via POST request')
+@attr(assertion='succeeds with status 204')
+def test_post_object_set_invalid_success_code():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read-write', Bucket=bucket_name)
+
+    url = _get_post_url(bucket_name)
+    payload = OrderedDict([("key" , "foo.txt"),("acl" , "public-read"),\
+    ("success_action_status" , "404"),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    eq(r.content,'')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds and returns written data')
+def test_post_object_upload_larger_than_chunk():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 5*1024*1024]\
+    ]\
+    }
+
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    foo_string = 'foo' * 1024*1024
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', foo_string)])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    response = client.get_object(Bucket=bucket_name, Key='foo.txt')
+    body = response['Body']
+    eq(body.read(), foo_string)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds and returns written data')
+def test_post_object_set_key_from_filename():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "${filename}"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('foo.txt', 'bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    response = client.get_object(Bucket=bucket_name, Key='foo.txt')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds with status 204')
+def test_post_object_ignored_header():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),("x-ignore-foo" , "bar"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds with status 204')
+def test_post_object_case_insensitive_condition_fields():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bUcKeT": bucket_name},\
+    ["StArTs-WiTh", "$KeY", "foo"],\
+    {"AcL": "private"},\
+    ["StArTs-WiTh", "$CoNtEnT-TyPe", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    foo_string = 'foo' * 1024*1024
+
+    payload = OrderedDict([ ("kEy" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("aCl" , "private"),("signature" , signature),("pOLICy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds with escaped leading $ and returns written data')
+def test_post_object_escaped_field_values():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "\$foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "\$foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    response = client.get_object(Bucket=bucket_name, Key='\$foo.txt')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds and returns redirect url')
+def test_post_object_success_redirect_action():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read-write', Bucket=bucket_name)
+
+    url = _get_post_url(bucket_name)
+    redirect_url = _get_post_url(bucket_name)
+
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["eq", "$success_action_redirect", redirect_url],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),("success_action_redirect" , redirect_url),\
+    ('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 200)
+    url = r.url
+    response = client.get_object(Bucket=bucket_name, Key='foo.txt')
+    eq(url,
+    '{rurl}?bucket={bucket}&key={key}&etag=%22{etag}%22'.format(rurl = redirect_url,\
+    bucket = bucket_name, key = 'foo.txt', etag = response['ETag'].strip('"')))
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with invalid signature error')
+def test_post_object_invalid_signature():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "\$foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())[::-1]
+
+    payload = OrderedDict([ ("key" , "\$foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with access key does not exist error')
+def test_post_object_invalid_access_key():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "\$foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "\$foo.txt"),("AWSAccessKeyId" , aws_access_key_id[::-1]),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with invalid expiration error')
+def test_post_object_invalid_date_format():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": str(expires),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "\$foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "\$foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with missing key error')
+def test_post_object_no_key_specified():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with missing signature error')
+def test_post_object_missing_signature():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "\$foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with extra input fields policy error')
+def test_post_object_missing_policy_condition():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    ["starts-with", "$key", "\$foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024]\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='succeeds using starts-with restriction on metadata header')
+def test_post_object_user_specified_header():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ["starts-with", "$x-amz-meta-foo",  "bar"]
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('x-amz-meta-foo' , 'barclamp'),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 204)
+    response = client.get_object(Bucket=bucket_name, Key='foo.txt')
+    eq(response['Metadata']['foo'], 'barclamp')
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with policy condition failed error due to missing field in POST request')
+def test_post_object_request_missing_policy_specified_field():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ["starts-with", "$x-amz-meta-foo",  "bar"]
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with conditions must be list error')
+def test_post_object_condition_is_case_sensitive():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "CONDITIONS": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with expiration must be string error')
+def test_post_object_expires_is_case_sensitive():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"EXPIRATION": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with policy expired error')
+def test_post_object_expired_policy():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=-6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key", "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails using equality restriction on metadata header')
+def test_post_object_invalid_request_field_value():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ["eq", "$x-amz-meta-foo",  ""]
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('x-amz-meta-foo' , 'barclamp'),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 403)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with policy missing expiration error')
+def test_post_object_missing_expires_condition():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 1024],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with policy missing conditions error')
+def test_post_object_missing_conditions_list():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with allowable upload size exceeded error')
+def test_post_object_upload_size_limit_exceeded():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0, 0],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with invalid content length error')
+def test_post_object_missing_content_length_argument():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 0],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with invalid JSON error')
+def test_post_object_invalid_content_length_argument():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", -1, 0],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='fails with upload size less than minimum allowable error')
+def test_post_object_upload_size_below_minimum():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    {"bucket": bucket_name},\
+    ["starts-with", "$key", "foo"],\
+    {"acl": "private"},\
+    ["starts-with", "$Content-Type", "text/plain"],\
+    ["content-length-range", 512, 1000],\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='authenticated browser based upload via POST request')
+@attr(assertion='empty conditions return appropriate error response')
+def test_post_object_empty_conditions():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    url = _get_post_url(bucket_name)
+    utc = pytz.utc
+    expires = datetime.datetime.now(utc) + datetime.timedelta(seconds=+6000)
+
+    policy_document = {"expiration": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),\
+    "conditions": [\
+    { }\
+    ]\
+    }
+
+    json_policy_document = json.JSONEncoder().encode(policy_document)
+    policy = base64.b64encode(json_policy_document)
+    aws_secret_access_key = get_config_aws_secret_key()
+    aws_access_key_id = get_config_aws_access_key()
+
+    signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
+
+    payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
+    ("acl" , "private"),("signature" , signature),("policy" , policy),\
+    ("Content-Type" , "text/plain"),('file', ('bar'))])
+
+    r = requests.post(url, files = payload)
+    eq(r.status_code, 400)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Match: the latest ETag')
+@attr(assertion='succeeds')
+def test_get_object_ifmatch_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    response = client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    etag = response['ETag']
+
+    response = client.get_object(Bucket=bucket_name, Key='foo', IfMatch=etag)
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Match: bogus ETag')
+@attr(assertion='fails 412')
+def test_get_object_ifmatch_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo', IfMatch='"ABCORZ"')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 412)
+    eq(error_code, 'PreconditionFailed')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-None-Match: the latest ETag')
+@attr(assertion='fails 304')
+def test_get_object_ifnonematch_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    response = client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    etag = response['ETag']
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo', IfNoneMatch=etag)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 304)
+    eq(e.response['Error']['Message'], 'Not Modified')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-None-Match: bogus ETag')
+@attr(assertion='succeeds')
+def test_get_object_ifnonematch_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo', IfNoneMatch='ABCORZ')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Modified-Since: before')
+@attr(assertion='succeeds')
+def test_get_object_ifmodifiedsince_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo', IfModifiedSince='Sat, 29 Oct 1994 19:43:31 GMT')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Modified-Since: after')
+@attr(assertion='fails 304')
+def test_get_object_ifmodifiedsince_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    last_modified = str(response['LastModified'])
+    
+    last_modified = last_modified.split('+')[0]
+    mtime = datetime.datetime.strptime(last_modified, '%Y-%m-%d %H:%M:%S')
+
+    after = mtime + datetime.timedelta(seconds=1)
+    after_str = time.strftime("%a, %d %b %Y %H:%M:%S GMT", after.timetuple())
+
+    time.sleep(1)
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo', IfModifiedSince=after_str)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 304)
+    eq(e.response['Error']['Message'], 'Not Modified')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Unmodified-Since: before')
+@attr(assertion='fails 412')
+def test_get_object_ifunmodifiedsince_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo', IfUnmodifiedSince='Sat, 29 Oct 1994 19:43:31 GMT')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 412)
+    eq(error_code, 'PreconditionFailed')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Unmodified-Since: after')
+@attr(assertion='succeeds')
+def test_get_object_ifunmodifiedsince_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo', IfUnmodifiedSince='Sat, 29 Oct 2100 19:43:31 GMT')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='data re-write w/ If-Match: the latest ETag')
+@attr(assertion='replaces previous data and metadata')
+@attr('fails_on_aws')
+def test_put_object_ifmatch_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+    etag = response['ETag'].replace('"', '')
+
+    # pass in custom header 'If-Match' before PutObject call
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-Match': etag}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    response = client.put_object(Bucket=bucket_name,Key='foo', Body='zar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'zar')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='get w/ If-Match: bogus ETag')
+@attr(assertion='fails 412')
+def test_put_object_ifmatch_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+    # pass in custom header 'If-Match' before PutObject call
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-Match': '"ABCORZ"'}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+
+    e = assert_raises(ClientError, client.put_object, Bucket=bucket_name, Key='foo', Body='zar')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 412)
+    eq(error_code, 'PreconditionFailed')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='overwrite existing object w/ If-Match: *')
+@attr(assertion='replaces previous data and metadata')
+@attr('fails_on_aws')
+def test_put_object_ifmatch_overwrite_existed_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-Match': '*'}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    response = client.put_object(Bucket=bucket_name,Key='foo', Body='zar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'zar')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='overwrite non-existing object w/ If-Match: *')
+@attr(assertion='fails 412')
+@attr('fails_on_aws')
+def test_put_object_ifmatch_nonexisted_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-Match': '*'}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    e = assert_raises(ClientError, client.put_object, Bucket=bucket_name, Key='foo', Body='bar')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 412)
+    eq(error_code, 'PreconditionFailed')
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchKey')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='overwrite existing object w/ If-None-Match: outdated ETag')
+@attr(assertion='replaces previous data and metadata')
+@attr('fails_on_aws')
+def test_put_object_ifnonmatch_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-None-Match': 'ABCORZ'}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    response = client.put_object(Bucket=bucket_name,Key='foo', Body='zar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'zar')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='overwrite existing object w/ If-None-Match: the latest ETag')
+@attr(assertion='fails 412')
+@attr('fails_on_aws')
+def test_put_object_ifnonmatch_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+    etag = response['ETag'].replace('"', '')
+
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-None-Match': etag}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    e = assert_raises(ClientError, client.put_object, Bucket=bucket_name, Key='foo', Body='zar')
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 412)
+    eq(error_code, 'PreconditionFailed')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='overwrite non-existing object w/ If-None-Match: *')
+@attr(assertion='succeeds')
+@attr('fails_on_aws')
+def test_put_object_ifnonmatch_nonexisted_good():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-None-Match': '*'}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='overwrite existing object w/ If-None-Match: *')
+@attr(assertion='fails 412')
+@attr('fails_on_aws')
+def test_put_object_ifnonmatch_overwrite_existed_failed():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+    lf = (lambda **kwargs: kwargs['params']['headers'].update({'If-None-Match': '*'}))
+    client.meta.events.register('before-call.s3.PutObject', lf)
+    e = assert_raises(ClientError, client.put_object, Bucket=bucket_name, Key='foo', Body='zar')
+
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 412)
+    eq(error_code, 'PreconditionFailed')
+
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    body = response['Body']
+    eq(body.read(), 'bar')
+
+def _setup_bucket_object_acl(bucket_acl, object_acl):
+    """
+    add a foo key, and specified key and bucket acls to
+    a (new or existing) bucket.
+    """
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL=bucket_acl, Bucket=bucket_name)
+    client.put_object(ACL=object_acl, Bucket=bucket_name, Key='foo')
+
+    return bucket_name 
+
+def _setup_bucket_acl(bucket_acl=None):
+    """
+    set up a new bucket with specified acl
+    """
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL=bucket_acl, Bucket=bucket_name)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='publically readable bucket')
+@attr(assertion='bucket is readable')
+def test_object_raw_get():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+
+    client = get_client()
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='deleted object and bucket')
+@attr(assertion='fails 404')
+def test_object_raw_get_bucket_gone():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+
+    client.delete_object(Bucket=bucket_name, Key='foo')
+    client.delete_bucket(Bucket=bucket_name)
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='deleted object and bucket')
+@attr(assertion='fails 404')
+def test_object_delete_key_bucket_gone():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+
+    client.delete_object(Bucket=bucket_name, Key='foo')
+    client.delete_bucket(Bucket=bucket_name)
+
+    e = assert_raises(ClientError, client.delete_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='deleted object')
+@attr(assertion='fails 404')
+def test_object_raw_get_object_gone():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+
+    client.delete_object(Bucket=bucket_name, Key='foo')
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchKey')
+
+@attr(resource='bucket')
+@attr(method='head')
+@attr(operation='head bucket')
+@attr(assertion='succeeds')
+def test_bucket_head():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    response = client.head_bucket(Bucket=bucket_name)
+    print response
+

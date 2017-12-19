@@ -8,8 +8,8 @@ host = localhost
 ## uncomment the port to use something other than 80
 port = 8000
 
-## say "no" to disable TLS
-is_secure = no
+## say "False" to disable TLS
+is_secure = False
 
 ## AWS access key
 access_key = 0555b35654ad1656d804

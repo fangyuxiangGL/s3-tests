@@ -1,0 +1,45 @@
+[DEFAULT]
+## this section is just used as default for all the "s3 *"
+## sections, you can place these variables also directly there
+
+## replace with e.g. "localhost" to run against local software
+host = localhost
+
+## uncomment the port to use something other than 80
+port = 8000
+
+## say "no" to disable TLS
+is_secure = no
+
+default_region = 'us-east-1'
+
+[fixtures]
+## all the buckets created will start with this prefix;
+## {random} will be filled with random characters to pad
+## the prefix to 30 characters long, and avoid collisions
+bucket prefix = yournamehere-{random}-
+
+[s3 main]
+## the tests assume two accounts are defined, "main" and "alt".
+
+## user_id is a 64-character hexstring
+user_id = 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+## display name typically looks more like a unix login, "jdoe" etc
+display_name = youruseridhere
+
+## replace these with your access keys
+access_key =  0555b35654ad1656d804
+secret_key = h7GhxuBLTrlhVUyxSPUKUV8r/2EI4ngqJxD7iBdBYLhwluN30JaT3Q==
+
+## replace with key id obtained when secret is created, or delete if KMS not tested
+kms_keyid = 01234567-89ab-cdef-0123-456789abcdef
+
+[s3 alt]
+## another user account, used for ACL-related tests
+user_id = 56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234
+display_name = john.doe
+## the "alt" user needs to have email set, too
+email = john.doe@example.com
+access_key =  0555b35654ad1656d804
+secret_key = h7GhxuBLTrlhVUyxSPUKUV8r/2EI4ngqJxD7iBdBYLhwluN30JaT3Q==
