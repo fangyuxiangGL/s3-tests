@@ -2754,6 +2754,8 @@ def _setup_bucket_acl(bucket_acl=None):
     client = get_client()
     client.create_bucket(ACL=bucket_acl, Bucket=bucket_name)
 
+    return bucket_name
+
 @attr(resource='object')
 @attr(method='get')
 @attr(operation='publically readable bucket')
@@ -2761,8 +2763,8 @@ def _setup_bucket_acl(bucket_acl=None):
 def test_object_raw_get():
     bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
 
-    client = get_client()
-    response = client.get_object(Bucket=bucket_name, Key='foo')
+    anon_client = get_anon_client()
+    response = anon_client.get_object(Bucket=bucket_name, Key='foo')
     eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
 @attr(resource='object')
@@ -2776,7 +2778,9 @@ def test_object_raw_get_bucket_gone():
     client.delete_object(Bucket=bucket_name, Key='foo')
     client.delete_bucket(Bucket=bucket_name)
 
-    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+    anon_client = get_anon_client()
+
+    e = assert_raises(ClientError, anon_client.get_object, Bucket=bucket_name, Key='foo')
     status, error_code = _get_status_and_error_code(e.response)
     eq(status, 404)
     eq(error_code, 'NoSuchBucket')
@@ -2792,7 +2796,9 @@ def test_object_delete_key_bucket_gone():
     client.delete_object(Bucket=bucket_name, Key='foo')
     client.delete_bucket(Bucket=bucket_name)
 
-    e = assert_raises(ClientError, client.delete_object, Bucket=bucket_name, Key='foo')
+    anon_client = get_anon_client()
+
+    e = assert_raises(ClientError, anon_client.delete_object, Bucket=bucket_name, Key='foo')
     status, error_code = _get_status_and_error_code(e.response)
     eq(status, 404)
     eq(error_code, 'NoSuchBucket')
@@ -2806,7 +2812,10 @@ def test_object_raw_get_object_gone():
     client = get_client()
 
     client.delete_object(Bucket=bucket_name, Key='foo')
-    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+
+    anon_client = get_anon_client()
+
+    e = assert_raises(ClientError, anon_client.get_object, Bucket=bucket_name, Key='foo')
     status, error_code = _get_status_and_error_code(e.response)
     eq(status, 404)
     eq(error_code, 'NoSuchKey')
@@ -2821,5 +2830,260 @@ def test_bucket_head():
     client = get_client()
 
     response = client.head_bucket(Bucket=bucket_name)
-    print response
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
+@attr('fails_on_aws')
+@attr(resource='bucket')
+@attr(method='head')
+@attr(operation='read bucket extended information')
+@attr(assertion='extended information is getting updated')
+def test_bucket_head_extended():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    response = client.head_bucket(Bucket=bucket_name)
+    #TODO: check to see if strings for values is ok
+    eq(response['ResponseMetadata']['HTTPHeaders']['x-rgw-object-count'], '0')
+    eq(response['ResponseMetadata']['HTTPHeaders']['x-rgw-bytes-used'], '0')
+
+    _create_objects(bucket=bucket,bucket_name=bucket_name, keys=['foo','bar','baz'])
+    response = client.head_bucket(Bucket=bucket_name)
+
+    eq(response['ResponseMetadata']['HTTPHeaders']['x-rgw-object-count'], '3')
+    eq(response['ResponseMetadata']['HTTPHeaders']['x-rgw-bytes-used'], '9')
+
+@attr(resource='bucket.acl')
+@attr(method='get')
+@attr(operation='unauthenticated on private bucket')
+@attr(assertion='succeeds')
+def test_object_raw_get_bucket_acl():
+    bucket_name = _setup_bucket_object_acl('private', 'public-read')
+
+    anon_client = get_anon_client()
+    response = anon_client.get_object(Bucket=bucket_name, Key='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+@attr(resource='object.acl')
+@attr(method='get')
+@attr(operation='unauthenticated on private object')
+@attr(assertion='fails 403')
+def test_object_raw_get_object_acl():
+    bucket_name = _setup_bucket_object_acl('public-read', 'private')
+
+    anon_client = get_anon_client()
+    e = assert_raises(ClientError, anon_client.get_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'AccessDenied')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='authenticated on public bucket/object')
+@attr(assertion='succeeds')
+def test_object_raw_authenticated():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+
+    client = get_client()
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='authenticated on private bucket/private object with modified response headers')
+@attr(assertion='succeeds')
+@attr('fails_on_rgw')
+def test_object_raw_response_headers():
+    bucket_name = _setup_bucket_object_acl('private', 'private')
+
+    client = get_client()
+
+    response = client.get_object(Bucket=bucket_name, Key='foo', ResponseCacheControl='no-cache', ResponseContentDisposition='bla', ResponseContentEncoding='aaa', ResponseContentLanguage='esperanto', ResponseContentType='foo/bar', ResponseExpires='123')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-type'], 'foo/bar')
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-disposition'], 'bla')
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-language'], 'esperanto')
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-encoding'], 'aaa')
+    eq(response['ResponseMetadata']['HTTPHeaders']['expires'], '123')
+    eq(response['ResponseMetadata']['HTTPHeaders']['cache-control'], 'no-cache')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='authenticated on private bucket/public object')
+@attr(assertion='succeeds')
+def test_object_raw_authenticated_bucket_acl():
+    bucket_name = _setup_bucket_object_acl('private', 'public-read')
+
+    client = get_client()
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='authenticated on public bucket/private object')
+@attr(assertion='succeeds')
+def test_object_raw_authenticated_object_acl():
+    bucket_name = _setup_bucket_object_acl('public-read', 'private')
+
+    client = get_client()
+    response = client.get_object(Bucket=bucket_name, Key='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='authenticated on deleted object and bucket')
+@attr(assertion='fails 404')
+def test_object_raw_authenticated_bucket_gone():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+
+    client.delete_object(Bucket=bucket_name, Key='foo')
+    client.delete_bucket(Bucket=bucket_name)
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchBucket')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='authenticated on deleted object')
+@attr(assertion='fails 404')
+def test_object_raw_authenticated_object_gone():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+
+    client.delete_object(Bucket=bucket_name, Key='foo')
+
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchKey')
+
+#@tag('auth_aws4')
+#@attr(resource='object')
+#@attr(method='get')
+#@attr(operation='x-amz-expires check not expired')
+#@attr(assertion='succeeds')
+#def test_object_raw_get_x_amz_expires_not_expired():
+    #TODO: figure out about the aws4_support and expires_in test
+
+#@tag('auth_aws4')
+#@attr(resource='object')
+#@attr(method='get')
+#@attr(operation='check x-amz-expires value out of range zero')
+#@attr(assertion='fails 403')
+#def test_object_raw_get_x_amz_expires_out_range_zero():
+    #TODO: figure out about the aws4_support and expires_in test
+
+
+#@tag('auth_aws4')
+#@attr(resource='object')
+#@attr(method='get')
+#@attr(operation='check x-amz-expires value out of max range')
+#@attr(assertion='fails 403')
+#def test_object_raw_get_x_amz_expires_out_max_range():
+    #TODO: figure out about the aws4_support and expires_in test
+
+#@tag('auth_aws4')
+#@attr(resource='object')
+#@attr(method='get')
+#@attr(operation='check x-amz-expires value out of positive range')
+#@attr(assertion='succeeds')
+#def test_object_raw_get_x_amz_expires_out_positive_range():
+    #TODO: figure out about the aws4_support and expires_in test
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='unauthenticated, no object acls')
+@attr(assertion='fails 403')
+def test_object_raw_put():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='foo')
+
+    anon_client = get_anon_client()
+
+    e = assert_raises(ClientError, anon_client.put_object, Bucket=bucket_name, Key='foo', Body='foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'AccessDenied')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='unauthenticated, publically writable object')
+@attr(assertion='succeeds')
+def test_object_raw_put_write_access():
+    bucket_name = _setup_bucket_acl('public-read-write')
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo')
+
+    anon_client = get_anon_client()
+
+    response = anon_client.put_object(Bucket=bucket_name, Key='foo', Body='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+#@attr(resource='object')
+#@attr(method='put')
+#@attr(operation='authenticated, no object acls')
+#@attr(assertion='succeeds')
+#def test_object_raw_put_authenticated():
+    # TODO: This one seems trivial, ask Casey about the authenticated thing
+    #bucket_name = get_new_bucket_name()
+    #bucket = get_new_bucket(name=bucket_name)
+    #client = get_client()
+
+    #client.put_object(Bucket=bucket_name, Key='foo')
+    #response = client.put_object(Bucket=bucket_name, Key='foo', Body='foo')
+    #eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+#@attr(resource='object')
+#@attr(method='put')
+#@attr(operation='authenticated, no object acls')
+#@attr(assertion='succeeds')
+#def test_object_raw_put_authenticated_expired():
+    # TODO: Figure out the expires_in thing
+
+def check_bad_bucket_name(bucket_name):
+    """
+    Attempt to create a bucket with a specified name, and confirm
+    that the request fails because of an invalid bucket name.
+    """
+    client = get_client()
+    e = assert_raises(ClientError, client.create_bucket, Bucket=bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'InvalidBucketName')
+
+
+# AWS does not enforce all documented bucket restrictions.
+# http://docs.amazonwebservices.com/AmazonS3/2006-03-01/dev/index.html?BucketRestrictions.html
+@attr('fails_on_aws')
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='name begins with underscore')
+@attr(assertion='fails with subdomain: 400')
+def test_bucket_create_naming_bad_starts_nonalpha():
+    bucket_name = get_new_bucket_name()
+    check_bad_bucket_name('_' + bucket_name)
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='empty name')
+@attr(assertion='fails 405')
+def test_bucket_create_naming_bad_short_empty():
+    # TODO: This leads to a ParamValidationError
+    # bucket creates where name is empty look like PUTs to the parent
+    # resource (with slash), hence their error response is different
+    client = get_client()
+    bucket_name = get_new_bucket_name()
+    boto3.set_stream_logger(name='botocore')
+    client.create_bucket(Bucket=bucket_name)
+    #e = assert_raises(ClientError, client.create_bucket, Bucket='')
+    #status, error_code = _get_status_and_error_code(e.response)
+    #eq(status, 405)
+    #eq(error_code, 'MethodNotAllowed')
