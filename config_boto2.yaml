@@ -3,7 +3,7 @@
 ## sections, you can place these variables also directly there
 
 ## replace with e.g. "localhost" to run against local software
-host = localhost
+host = s3.localhost.localdomain
 
 ## uncomment the port to use something other than 80
 port = 8000
@@ -41,5 +41,5 @@ user_id = 56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234
 display_name = john.doe
 ## the "alt" user needs to have email set, too
 email = john.doe@example.com
-access_key =  0555b35654ad1656d804
-secret_key = h7GhxuBLTrlhVUyxSPUKUV8r/2EI4ngqJxD7iBdBYLhwluN30JaT3Q==
+access_key = NOPQRSTUVWXYZABCDEFG
+secret_key = nopqrstuvwxyzabcdefghijklmnabcdefghijklm

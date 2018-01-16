@@ -19,6 +19,7 @@ import hmac
 import sha
 import xml.etree.ElementTree as ET
 import time
+import operator
 
 from email.header import decode_header
 
@@ -26,6 +27,7 @@ from .utils import assert_raises
 
 from . import (
     get_client,
+    get_prefix,
     get_anon_client,
     get_anon_resource,
     get_new_bucket,
@@ -33,9 +35,21 @@ from . import (
     get_config_is_secure,
     get_config_host,
     get_config_port,
-    get_config_aws_access_key,
-    get_config_aws_secret_key,
+    get_main_aws_access_key,
+    get_main_aws_secret_key,
+    get_main_display_name,
+    get_main_user_id,
+    get_main_email,
+    get_main_api_name,
+    get_alt_aws_access_key,
+    get_alt_aws_secret_key,
+    get_alt_display_name,
+    get_alt_user_id,
+    get_alt_email,
+    get_alt_client,
+    get_buckets_list,
     )
+
 
 def _bucket_is_empty(bucket):
     is_empty = True
@@ -1384,8 +1398,8 @@ def test_post_object_authenticated_request():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1425,8 +1439,8 @@ def test_post_object_authenticated_request_bad_access_key():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1500,8 +1514,8 @@ def test_post_object_upload_larger_than_chunk():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1542,8 +1556,8 @@ def test_post_object_set_key_from_filename():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1583,8 +1597,8 @@ def test_post_object_ignored_header():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1620,8 +1634,8 @@ def test_post_object_case_insensitive_condition_fields():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1659,8 +1673,8 @@ def test_post_object_escaped_field_values():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1702,8 +1716,8 @@ def test_post_object_success_redirect_action():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1745,8 +1759,8 @@ def test_post_object_invalid_signature():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())[::-1]
 
@@ -1782,8 +1796,8 @@ def test_post_object_invalid_access_key():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1819,8 +1833,8 @@ def test_post_object_invalid_date_format():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1855,8 +1869,8 @@ def test_post_object_no_key_specified():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1892,8 +1906,8 @@ def test_post_object_missing_signature():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1928,8 +1942,8 @@ def test_post_object_missing_policy_condition():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -1966,8 +1980,8 @@ def test_post_object_user_specified_header():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2006,8 +2020,8 @@ def test_post_object_request_missing_policy_specified_field():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2043,8 +2057,8 @@ def test_post_object_condition_is_case_sensitive():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2080,8 +2094,8 @@ def test_post_object_expires_is_case_sensitive():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2117,8 +2131,8 @@ def test_post_object_expired_policy():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2155,8 +2169,8 @@ def test_post_object_invalid_request_field_value():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
     payload = OrderedDict([ ("key" , "foo.txt"),("AWSAccessKeyId" , aws_access_key_id),\
@@ -2191,8 +2205,8 @@ def test_post_object_missing_expires_condition():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2220,8 +2234,8 @@ def test_post_object_missing_conditions_list():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2257,8 +2271,8 @@ def test_post_object_upload_size_limit_exceeded():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2294,8 +2308,8 @@ def test_post_object_missing_content_length_argument():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2331,8 +2345,8 @@ def test_post_object_invalid_content_length_argument():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2368,8 +2382,8 @@ def test_post_object_upload_size_below_minimum():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2401,8 +2415,8 @@ def test_post_object_empty_conditions():
 
     json_policy_document = json.JSONEncoder().encode(policy_document)
     policy = base64.b64encode(json_policy_document)
-    aws_secret_access_key = get_config_aws_secret_key()
-    aws_access_key_id = get_config_aws_access_key()
+    aws_secret_access_key = get_main_aws_secret_key()
+    aws_access_key_id = get_main_aws_access_key()
 
     signature = base64.b64encode(hmac.new(aws_secret_access_key, policy, sha).digest())
 
@@ -2960,44 +2974,68 @@ def test_object_raw_authenticated_object_gone():
     eq(status, 404)
     eq(error_code, 'NoSuchKey')
 
-#@tag('auth_aws4')
-#@attr(resource='object')
-#@attr(method='get')
-#@attr(operation='x-amz-expires check not expired')
-#@attr(assertion='succeeds')
-#def test_object_raw_get_x_amz_expires_not_expired():
-    #TODO: figure out about the aws4_support and expires_in test
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='x-amz-expires check not expired')
+@attr(assertion='succeeds')
+def test_object_raw_get_x_amz_expires_not_expired():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+    params = {'Bucket': bucket_name, 'Key': 'foo'}
 
-#@tag('auth_aws4')
-#@attr(resource='object')
-#@attr(method='get')
-#@attr(operation='check x-amz-expires value out of range zero')
-#@attr(assertion='fails 403')
-#def test_object_raw_get_x_amz_expires_out_range_zero():
-    #TODO: figure out about the aws4_support and expires_in test
+    url = client.generate_presigned_url(ClientMethod='get_object', Params=params, ExpiresIn=100000, HttpMethod='GET')
 
+    res = requests.get(url).__dict__
+    eq(res['status_code'], 200)
 
-#@tag('auth_aws4')
-#@attr(resource='object')
-#@attr(method='get')
-#@attr(operation='check x-amz-expires value out of max range')
-#@attr(assertion='fails 403')
-#def test_object_raw_get_x_amz_expires_out_max_range():
-    #TODO: figure out about the aws4_support and expires_in test
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='check x-amz-expires value out of range zero')
+@attr(assertion='fails 403')
+def test_object_raw_get_x_amz_expires_out_range_zero():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+    params = {'Bucket': bucket_name, 'Key': 'foo'}
 
-#@tag('auth_aws4')
-#@attr(resource='object')
-#@attr(method='get')
-#@attr(operation='check x-amz-expires value out of positive range')
-#@attr(assertion='succeeds')
-#def test_object_raw_get_x_amz_expires_out_positive_range():
-    #TODO: figure out about the aws4_support and expires_in test
+    url = client.generate_presigned_url(ClientMethod='get_object', Params=params, ExpiresIn=0, HttpMethod='GET')
+
+    res = requests.get(url).__dict__
+    eq(res['status_code'], 403)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='check x-amz-expires value out of max range')
+@attr(assertion='fails 403')
+def test_object_raw_get_x_amz_expires_out_max_range():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+    params = {'Bucket': bucket_name, 'Key': 'foo'}
+
+    url = client.generate_presigned_url(ClientMethod='get_object', Params=params, ExpiresIn=609901, HttpMethod='GET')
+
+    res = requests.get(url).__dict__
+    eq(res['status_code'], 403)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='check x-amz-expires value out of positive range')
+@attr(assertion='succeeds')
+def test_object_raw_get_x_amz_expires_out_positive_range():
+    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
+    client = get_client()
+    params = {'Bucket': bucket_name, 'Key': 'foo'}
+
+    url = client.generate_presigned_url(ClientMethod='get_object', Params=params, ExpiresIn=-7, HttpMethod='GET')
+
+    res = requests.get(url).__dict__
+    eq(res['status_code'], 403)
+
 
 @attr(resource='object')
 @attr(method='put')
 @attr(operation='unauthenticated, no object acls')
 @attr(assertion='fails 403')
-def test_object_raw_put():
+def test_object_anon_put():
     bucket_name = get_new_bucket_name()
     bucket = get_new_bucket(name=bucket_name)
     client = get_client()
@@ -3015,7 +3053,7 @@ def test_object_raw_put():
 @attr(method='put')
 @attr(operation='unauthenticated, publically writable object')
 @attr(assertion='succeeds')
-def test_object_raw_put_write_access():
+def test_object_anon_put_write_access():
     bucket_name = _setup_bucket_acl('public-read-write')
     client = get_client()
     client.put_object(Bucket=bucket_name, Key='foo')
@@ -3025,26 +3063,34 @@ def test_object_raw_put_write_access():
     response = anon_client.put_object(Bucket=bucket_name, Key='foo', Body='foo')
     eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
-#@attr(resource='object')
-#@attr(method='put')
-#@attr(operation='authenticated, no object acls')
-#@attr(assertion='succeeds')
-#def test_object_raw_put_authenticated():
-    # TODO: This one seems trivial, ask Casey about the authenticated thing
-    #bucket_name = get_new_bucket_name()
-    #bucket = get_new_bucket(name=bucket_name)
-    #client = get_client()
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='authenticated, no object acls')
+@attr(assertion='succeeds')
+def test_object_put_authenticated():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
 
-    #client.put_object(Bucket=bucket_name, Key='foo')
-    #response = client.put_object(Bucket=bucket_name, Key='foo', Body='foo')
-    #eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+    response = client.put_object(Bucket=bucket_name, Key='foo', Body='foo')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
-#@attr(resource='object')
-#@attr(method='put')
-#@attr(operation='authenticated, no object acls')
-#@attr(assertion='succeeds')
-#def test_object_raw_put_authenticated_expired():
-    # TODO: Figure out the expires_in thing
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='authenticated, no object acls')
+@attr(assertion='succeeds')
+def test_object_raw_put_authenticated_expired():
+    bucket_name = get_new_bucket_name()
+    bucket = get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo')
+
+    params = {'Bucket': bucket_name, 'Key': 'foo'}
+    url = client.generate_presigned_url(ClientMethod='put_object', Params=params, ExpiresIn=-1000, HttpMethod='PUT')
+
+    # params wouldn't take a 'Body' parameter so we're passing it in here
+    res = requests.put(url,data="foo").__dict__
+    eq(res['status_code'], 403)
 
 def check_bad_bucket_name(bucket_name):
     """
@@ -3071,19 +3117,1700 @@ def test_bucket_create_naming_bad_starts_nonalpha():
     bucket_name = get_new_bucket_name()
     check_bad_bucket_name('_' + bucket_name)
 
+def check_invalid_bucketname(invalid_name):
+    """
+    Send a create bucket_request with an invalid bucket name
+    that will bypass the ParamValidationError that would be raised
+    if the invalid bucket name that was passed in normally.
+    This function returns the status and error code from the failure
+    """
+    client = get_client()
+    valid_bucket_name = get_new_bucket_name()
+    def replace_bucketname_from_url(**kwargs):
+        url = kwargs['params']['url']
+        new_url = url.replace(valid_bucket_name, invalid_name)
+        kwargs['params']['url'] = new_url
+    client.meta.events.register('before-call.s3.CreateBucket', replace_bucketname_from_url)
+    e = assert_raises(ClientError, client.create_bucket, Bucket=valid_bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    return (status, error_code)
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='empty name')
 @attr(assertion='fails 405')
 def test_bucket_create_naming_bad_short_empty():
-    # TODO: This leads to a ParamValidationError
-    # bucket creates where name is empty look like PUTs to the parent
-    # resource (with slash), hence their error response is different
+    invalid_bucketname = ''
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 405)
+    eq(error_code, 'MethodNotAllowed')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='short (one character) name')
+@attr(assertion='fails 400')
+def test_bucket_create_naming_bad_short_one():
+    check_bad_bucket_name('a')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='short (two character) name')
+@attr(assertion='fails 400')
+def test_bucket_create_naming_bad_short_two():
+    check_bad_bucket_name('aa')
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='excessively long names')
+@attr(assertion='fails with subdomain: 400')
+def test_bucket_create_naming_bad_long():
+    invalid_bucketname = 256*'a'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+
+    invalid_bucketname = 280*'a'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+
+    invalid_bucketname = 3000*'a'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+
+def check_good_bucket_name(name, _prefix=None):
+    """
+    Attempt to create a bucket with a specified name
+    and (specified or default) prefix, returning the
+    results of that effort.
+    """
+    # tests using this with the default prefix must *not* rely on
+    # being able to set the initial character, or exceed the max len
+
+    # tests using this with a custom prefix are responsible for doing
+    # their own setup/teardown nukes, with their custom prefix; this
+    # should be very rare
+    if _prefix is None:
+        _prefix = get_prefix()
+    bucket_name = '{prefix}{name}'.format(
+            prefix=_prefix,
+            name=name,
+            )
     client = get_client()
+    response = client.create_bucket(Bucket=bucket_name)
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+def _test_bucket_create_naming_good_long(length):
+    """
+    Attempt to create a bucket whose name (including the
+    prefix) is of a specified length.
+    """
+    # tests using this with the default prefix must *not* rely on
+    # being able to set the initial character, or exceed the max len
+
+    # tests using this with a custom prefix are responsible for doing
+    # their own setup/teardown nukes, with their custom prefix; this
+    # should be very rare
+    prefix = get_new_bucket_name()
+    assert len(prefix) < 255
+    num = length - len(prefix)
+    name=num*'a'
+
+    bucket_name = '{prefix}{name}'.format(
+            prefix=prefix,
+            name=name,
+            )
+    client = get_client()
+    response = client.create_bucket(Bucket=bucket_name)
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/250 byte name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_good_long_250():
+    _test_bucket_create_naming_good_long(250)
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/251 byte name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_good_long_251():
+    _test_bucket_create_naming_good_long(251)
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/252 byte name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_good_long_252():
+    _test_bucket_create_naming_good_long(252)
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/253 byte name')
+@attr(assertion='fails with subdomain')
+def test_bucket_create_naming_good_long_253():
+    _test_bucket_create_naming_good_long(253)
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/254 byte name')
+@attr(assertion='fails with subdomain')
+def test_bucket_create_naming_good_long_254():
+    _test_bucket_create_naming_good_long(254)
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/255 byte name')
+@attr(assertion='fails with subdomain')
+def test_bucket_create_naming_good_long_255():
+    _test_bucket_create_naming_good_long(255)
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list w/251 byte name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_list_long_name():
+    prefix = get_new_bucket_name()
+    length = 251
+    num = length - len(prefix)
+    name=num*'a'
+
+    bucket_name = '{prefix}{name}'.format(
+            prefix=prefix,
+            name=name,
+            )
+    bucket = get_new_bucket(name=bucket_name)
+    is_empty = _bucket_is_empty(bucket) 
+    eq(is_empty, True)
+    
+# AWS does not enforce all documented bucket restrictions.
+# http://docs.amazonwebservices.com/AmazonS3/2006-03-01/dev/index.html?BucketRestrictions.html
+@attr('fails_on_aws')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/ip address for name')
+@attr(assertion='fails on aws')
+def test_bucket_create_naming_bad_ip():
+    check_bad_bucket_name('192.168.5.123')
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/! in name')
+@attr(assertion='fails with subdomain')
+def test_bucket_create_naming_bad_punctuation():
+    # characters other than [a-zA-Z0-9._-]
+    invalid_bucketname = 'alpha!soup'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+    eq(error_code, 'InvalidBucketName')
+
+# test_bucket_create_naming_dns_* are valid but not recommended
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/underscore in name')
+@attr(assertion='succeeds')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_dns_underscore():
+    check_good_bucket_name('foo_bar')
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/100 byte name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_dns_long():
+    prefix = get_prefix()
+    assert len(prefix) < 50
+    num = 100 - len(prefix)
+    check_good_bucket_name(num * 'a')
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/dash at end of name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_dns_dash_at_end():
+    check_good_bucket_name('foo-')
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/.. in name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_dns_dot_dot():
+    check_good_bucket_name('foo..bar')
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/.- in name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_dns_dot_dash():
+    check_good_bucket_name('foo.-bar')
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create w/-. in name')
+@attr(assertion='fails with subdomain')
+@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
+def test_bucket_create_naming_dns_dash_dot():
+    check_good_bucket_name('foo-.bar')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='re-create')
+def test_bucket_create_exists():
+    # aws-s3 default region allows recreation of buckets
+    # but all other regions fail with BucketAlreadyOwnedByYou.
     bucket_name = get_new_bucket_name()
-    boto3.set_stream_logger(name='botocore')
+    client = get_client()
+
     client.create_bucket(Bucket=bucket_name)
-    #e = assert_raises(ClientError, client.create_bucket, Bucket='')
-    #status, error_code = _get_status_and_error_code(e.response)
-    #eq(status, 405)
-    #eq(error_code, 'MethodNotAllowed')
+    try:
+        response = client.create_bucket(Bucket=bucket_name)
+    except ClientError, e:
+        status, error_code = _get_status_and_error_code(e.response)
+        eq(e.status, 409)
+        eq(e.error_code, 'BucketAlreadyOwnedByYou')
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='get location')
+def test_bucket_get_location():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+
+    location_constraint = get_main_api_name()
+    client.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={'LocationConstraint': location_constraint})
+
+    response = client.get_bucket_location(Bucket=bucket_name)
+    if location_constraint == "":
+        location_constraint = None
+    eq(response['LocationConstraint'], location_constraint)
+    
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='re-create by non-owner')
+@attr(assertion='fails 409')
+def test_bucket_create_exists_nonowner():
+    # Names are shared across a global namespace. As such, no two
+    # users can create a bucket with that same name.
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+
+    alt_client = get_alt_client()
+
+    client.create_bucket(Bucket=bucket_name)
+    e = assert_raises(ClientError, alt_client.create_bucket, Bucket=bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 409)
+    eq(error_code, 'BucketAlreadyExists')
+
+def check_access_denied(fn, *args, **kwargs):
+    e = assert_raises(ClientError, fn, *args, **kwargs)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+
+def check_grants(got, want):
+    """
+    Check that grants list in got matches the dictionaries in want,
+    in any order.
+    """
+    eq(len(got), len(want))
+    for g, w in zip(got, want):
+        w = dict(w)
+        g = dict(g)
+        eq(g.pop('Permission', None), w['Permission'])
+        eq(g['Grantee'].pop('DisplayName', None), w['DisplayName'])
+        eq(g['Grantee'].pop('ID', None), w['ID'])
+        eq(g['Grantee'].pop('Type', None), w['Type'])
+        eq(g['Grantee'].pop('URI', None), w['URI'])
+        eq(g['Grantee'].pop('EmailAddress', None), w['EmailAddress'])
+        eq(g, {'Grantee': {}})
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='default acl')
+@attr(assertion='read back expected defaults')
+def test_bucket_acl_default():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+    
+    eq(response['Owner']['DisplayName'], display_name)
+    eq(response['Owner']['ID'], user_id)
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='public-read acl')
+@attr(assertion='read back expected defaults')
+@attr('fails_on_aws') # <Error><Code>IllegalLocationConstraintException</Code><Message>The unspecified location constraint is incompatible for the region specific endpoint this request was sent to.</Message>
+def test_bucket_acl_canned_during_create():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read', Bucket=bucket_name)
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='acl: public-read,private')
+@attr(assertion='read back expected values')
+def test_bucket_acl_canned():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read', Bucket=bucket_name)
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+    client.put_bucket_acl(ACL='private', Bucket=bucket_name)
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='bucket.acls')
+@attr(method='put')
+@attr(operation='acl: public-read-write')
+@attr(assertion='read back expected values')
+def test_bucket_acl_canned_publicreadwrite():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='public-read-write', Bucket=bucket_name)
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='WRITE',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='acl: authenticated-read')
+@attr(assertion='read back expected values')
+def test_bucket_acl_canned_authenticatedread():
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL='authenticated-read', Bucket=bucket_name)
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AuthenticatedUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='get')
+@attr(operation='default acl')
+@attr(assertion='read back expected defaults')
+def test_object_acl_default():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='acl public-read')
+@attr(assertion='read back expected values')
+def test_object_acl_canned_during_create():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(ACL='public-read', Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='acl public-read,private')
+@attr(assertion='read back expected values')
+def test_object_acl_canned():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    # Since it defaults to private, set it public-read first
+    client.put_object(ACL='public-read', Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+    # Then back to private.
+    client.put_object_acl(ACL='private',Bucket=bucket_name, Key='foo')
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+    grants = response['Grants']
+
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='acl public-read-write')
+@attr(assertion='read back expected values')
+def test_object_acl_canned_publicreadwrite():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(ACL='public-read-write', Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='WRITE',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AllUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='acl authenticated-read')
+@attr(assertion='read back expected values')
+def test_object_acl_canned_authenticatedread():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(ACL='authenticated-read', Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    display_name = get_main_display_name()
+    user_id = get_main_user_id()
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=None,
+                DisplayName=None,
+                URI='http://acs.amazonaws.com/groups/global/AuthenticatedUsers',
+                EmailAddress=None,
+                Type='Group',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=user_id,
+                DisplayName=display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='acl bucket-owner-read')
+@attr(assertion='read back expected values')
+def test_object_acl_canned_bucketownerread():
+    bucket_name = get_new_bucket_name()
+    main_client = get_client()
+    alt_client = get_alt_client()
+
+    main_client.create_bucket(Bucket=bucket_name, ACL='public-read-write')
+    
+    alt_client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    bucket_acl_response = main_client.get_bucket_acl(Bucket=bucket_name)
+    bucket_owner_id = bucket_acl_response['Grants'][2]['Grantee']['ID']
+    bucket_owner_display_name = bucket_acl_response['Grants'][2]['Grantee']['DisplayName']
+
+    alt_client.put_object(ACL='bucket-owner-read', Bucket=bucket_name, Key='foo')
+    response = alt_client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    alt_display_name = get_alt_display_name()
+    alt_user_id = get_alt_user_id()
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='READ',
+                ID=bucket_owner_id,
+                DisplayName=bucket_owner_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='acl bucket-owner-read')
+@attr(assertion='read back expected values')
+def test_object_acl_canned_bucketownerfullcontrol():
+    bucket_name = get_new_bucket_name()
+    main_client = get_client()
+    alt_client = get_alt_client()
+
+    main_client.create_bucket(Bucket=bucket_name, ACL='public-read-write')
+    
+    alt_client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    bucket_acl_response = main_client.get_bucket_acl(Bucket=bucket_name)
+    bucket_owner_id = bucket_acl_response['Grants'][2]['Grantee']['ID']
+    bucket_owner_display_name = bucket_acl_response['Grants'][2]['Grantee']['DisplayName']
+
+    alt_client.put_object(ACL='bucket-owner-full-control', Bucket=bucket_name, Key='foo')
+    response = alt_client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    alt_display_name = get_alt_display_name()
+    alt_user_id = get_alt_user_id()
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=bucket_owner_id,
+                DisplayName=bucket_owner_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='set write-acp')
+@attr(assertion='does not modify owner')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_object_acl_full_control_verify_owner():
+    bucket_name = get_new_bucket_name()
+    main_client = get_client()
+    alt_client = get_alt_client()
+
+    main_client.create_bucket(Bucket=bucket_name, ACL='public-read-write')
+    
+    main_client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    alt_user_id = get_alt_user_id()
+    alt_display_name = get_alt_display_name()
+
+    main_user_id = get_main_user_id()
+    main_display_name = get_main_display_name()
+
+    grant = { 'Grants': [{'Grantee': {'ID': alt_user_id, 'Type': 'CanonicalUser' }, 'Permission': 'FULL_CONTROL'}], 'Owner': {'DisplayName': main_display_name, 'ID': main_user_id}}
+
+    main_client.put_object_acl(Bucket=bucket_name, Key='foo', AccessControlPolicy=grant)
+    
+    grant = { 'Grants': [{'Grantee': {'ID': alt_user_id, 'Type': 'CanonicalUser' }, 'Permission': 'READ_ACP'}], 'Owner': {'DisplayName': main_display_name, 'ID': main_user_id}}
+
+    alt_client.put_object_acl(Bucket=bucket_name, Key='foo', AccessControlPolicy=grant)
+
+    response = alt_client.get_object_acl(Bucket=bucket_name, Key='foo')
+    eq(response['Owner']['ID'], main_user_id)
+
+def add_obj_user_grant(bucket_name, key, grant):
+    """
+    Adds a grant to the existing grants meant to be passed into
+    the AccessControlPolicy argument of put_object_acls for an object
+    owned by the main user, not the alt user
+    A grant is a dictionary in the form of:
+    {u'Grantee': {u'Type': 'type', u'DisplayName': 'name', u'ID': 'id'}, u'Permission': 'PERM'}
+    
+    """
+    client = get_client()
+    main_user_id = get_main_user_id()
+    main_display_name = get_main_display_name()
+
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    grants = response['Grants']
+    grants.append(grant)
+
+    grant = {'Grants': grants, 'Owner': {'DisplayName': main_display_name, 'ID': main_user_id}}
+
+    return grant
+
+@attr(resource='object.acls')
+@attr(method='put')
+@attr(operation='set write-acp')
+@attr(assertion='does not modify other attributes')
+def test_object_acl_full_control_verify_attributes():
+    bucket_name = get_new_bucket_name()
+    main_client = get_client()
+    alt_client = get_alt_client()
+
+    main_client.create_bucket(Bucket=bucket_name, ACL='public-read-write')
+    
+    header = {'x-amz-foo': 'bar'}
+    # lambda to add any header
+    add_header = (lambda **kwargs: kwargs['params']['headers'].update(header))
+
+    main_client.meta.events.register('before-call.s3.PutObject', add_header)
+    main_client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = main_client.get_object(Bucket=bucket_name, Key='foo')
+    content_type = response['ContentType']
+    etag = response['ETag']
+
+    alt_user_id = get_alt_user_id()
+
+    grant = {'Grantee': {'ID': alt_user_id, 'Type': 'CanonicalUser' }, 'Permission': 'FULL_CONTROL'}
+
+    grants = add_obj_user_grant(bucket_name, 'foo', grant)
+
+    main_client.put_object_acl(Bucket=bucket_name, Key='foo', AccessControlPolicy=grants)
+
+    response = main_client.get_object(Bucket=bucket_name, Key='foo')
+    eq(content_type, response['ContentType'])
+    eq(etag, response['ETag'])
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl private')
+@attr(assertion='a private object can be set to private')
+def test_bucket_acl_canned_private_to_private():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    response = client.put_bucket_acl(Bucket=bucket_name, ACL='private')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
+def add_bucket_user_grant(bucket_name, grant):
+    """
+    Adds a grant to the existing grants meant to be passed into
+    the AccessControlPolicy argument of put_object_acls for an object
+    owned by the main user, not the alt user
+    A grant is a dictionary in the form of:
+    {u'Grantee': {u'Type': 'type', u'DisplayName': 'name', u'ID': 'id'}, u'Permission': 'PERM'}
+    """
+    client = get_client()
+    main_user_id = get_main_user_id()
+    main_display_name = get_main_display_name()
+
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    grants = response['Grants']
+    grants.append(grant)
+
+    grant = {'Grants': grants, 'Owner': {'DisplayName': main_display_name, 'ID': main_user_id}}
+
+    return grant
+
+def _check_object_acl(permission):
+    """
+    Sets the permission on an object then checks to see 
+    if it was set
+    """
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+
+    policy = {}
+    policy['Owner'] = response['Owner']
+    policy['Grants'] = response['Grants']
+    policy['Grants'][0]['Permission'] = permission
+
+    client.put_object_acl(Bucket=bucket_name, Key='foo', AccessControlPolicy=policy)
+
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+    grants = response['Grants']
+
+    main_user_id = get_main_user_id()
+    main_display_name = get_main_display_name()
+
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission=permission,
+                ID=main_user_id,
+                DisplayName=main_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set acl FULL_CONTRO')
+@attr(assertion='reads back correctly')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${USER}</ArgumentValue>
+def test_object_acl():
+    _check_object_acl('FULL_CONTROL')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set acl WRITE')
+@attr(assertion='reads back correctly')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${USER}</ArgumentValue>
+def test_object_acl_write():
+    _check_object_acl('WRITE')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set acl WRITE_ACP')
+@attr(assertion='reads back correctly')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${USER}</ArgumentValue>
+def test_object_acl_writeacp():
+    _check_object_acl('WRITE_ACP')
+
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set acl READ')
+@attr(assertion='reads back correctly')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${USER}</ArgumentValue>
+def test_object_acl_read():
+    _check_object_acl('READ')
+
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set acl READ_ACP')
+@attr(assertion='reads back correctly')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${USER}</ArgumentValue>
+def test_object_acl_readacp():
+    _check_object_acl('READ_ACP')
+
+
+def _bucket_acl_grant_userid(permission):
+    """
+    create a new bucket, grant a specific user the specified
+    permission, read back the acl and verify correct setting
+    """
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    main_user_id = get_main_user_id()
+    main_display_name = get_main_display_name()
+
+    alt_user_id = get_alt_user_id()
+    alt_display_name = get_alt_display_name()
+
+    grant = {'Grantee': {'ID': alt_user_id, 'Type': 'CanonicalUser' }, 'Permission': permission}
+
+    grant = add_bucket_user_grant(bucket_name, grant)
+
+    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=grant)
+
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission=permission,
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=main_user_id,
+                DisplayName=main_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+    return bucket_name
+
+def _check_bucket_acl_grant_can_read(bucket_name):
+    """
+    verify ability to read the specified bucket
+    """
+    alt_client = get_alt_client()
+    response = alt_client.head_bucket(Bucket=bucket_name)
+
+def _check_bucket_acl_grant_cant_read(bucket_name):
+    """
+    verify inability to read the specified bucket
+    """
+    alt_client = get_alt_client()
+    check_access_denied(alt_client.head_bucket, Bucket=bucket_name)
+
+def _check_bucket_acl_grant_can_readacp(bucket_name):
+    """
+    verify ability to read acls on specified bucket
+    """
+    alt_client = get_alt_client()
+    alt_client.get_bucket_acl(Bucket=bucket_name)
+
+def _check_bucket_acl_grant_cant_readacp(bucket_name):
+    """
+    verify inability to read acls on specified bucket
+    """
+    alt_client = get_alt_client()
+    check_access_denied(alt_client.get_bucket_acl, Bucket=bucket_name)
+
+def _check_bucket_acl_grant_can_write(bucket_name):
+    """
+    verify ability to write the specified bucket
+    """
+    alt_client = get_alt_client()
+    alt_client.put_object(Bucket=bucket_name, Key='foo-write', Body='bar')
+
+def _check_bucket_acl_grant_cant_write(bucket_name):
+
+    """
+    verify inability to write the specified bucket
+    """
+    alt_client = get_alt_client()
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key='foo-write', Body='bar')
+
+def _check_bucket_acl_grant_can_writeacp(bucket_name):
+    """
+    verify ability to set acls on the specified bucket
+    """
+    alt_client = get_alt_client()
+    alt_client.put_bucket_acl(Bucket=bucket_name, ACL='public-read')
+
+def _check_bucket_acl_grant_cant_writeacp(bucket_name):
+    """
+    verify inability to set acls on the specified bucket
+    """
+    alt_client = get_alt_client()
+    check_access_denied(alt_client.put_bucket_acl,Bucket=bucket_name, ACL='public-read')
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl w/userid FULL_CONTROL')
+@attr(assertion='can read/write data/acls')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${USER}</ArgumentValue>
+def test_bucket_acl_grant_userid_fullcontrol():
+    bucket_name = _bucket_acl_grant_userid('FULL_CONTROL')
+
+    # alt user can read
+    _check_bucket_acl_grant_can_read(bucket_name)
+    # can read acl
+    _check_bucket_acl_grant_can_readacp(bucket_name)
+    # can write
+    _check_bucket_acl_grant_can_write(bucket_name)
+    # can write acl
+    _check_bucket_acl_grant_can_writeacp(bucket_name)
+
+    client = get_client()
+
+    bucket_acl_response = client.get_bucket_acl(Bucket=bucket_name)
+    owner_id = bucket_acl_response['Owner']['ID']
+    owner_display_name = bucket_acl_response['Owner']['DisplayName']
+
+    main_display_name = get_main_display_name()
+    main_user_id = get_main_user_id()
+
+    eq(owner_id, main_user_id)
+    eq(owner_display_name, main_display_name)
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl w/userid READ')
+@attr(assertion='can read data, no other r/w')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_bucket_acl_grant_userid_read():
+    bucket_name = _bucket_acl_grant_userid('READ')
+
+    # alt user can read
+    _check_bucket_acl_grant_can_read(bucket_name)
+    # can't read acl
+    _check_bucket_acl_grant_cant_readacp(bucket_name)
+    # can't write
+    _check_bucket_acl_grant_cant_write(bucket_name)
+    # can't write acl
+    _check_bucket_acl_grant_cant_writeacp(bucket_name)
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl w/userid READ_ACP')
+@attr(assertion='can read acl, no other r/w')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_bucket_acl_grant_userid_readacp():
+    bucket_name = _bucket_acl_grant_userid('READ_ACP')
+
+    # alt user can't read
+    _check_bucket_acl_grant_cant_read(bucket_name)
+    # can read acl
+    _check_bucket_acl_grant_can_readacp(bucket_name)
+    # can't write
+    _check_bucket_acl_grant_cant_write(bucket_name)
+    # can't write acp
+    #_check_bucket_acl_grant_cant_writeacp_can_readacp(bucket)
+    _check_bucket_acl_grant_cant_writeacp(bucket_name)
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl w/userid WRITE')
+@attr(assertion='can write data, no other r/w')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_bucket_acl_grant_userid_write():
+    bucket_name = _bucket_acl_grant_userid('WRITE')
+
+    # alt user can't read
+    _check_bucket_acl_grant_cant_read(bucket_name)
+    # can't read acl
+    _check_bucket_acl_grant_cant_readacp(bucket_name)
+    # can write
+    _check_bucket_acl_grant_can_write(bucket_name)
+    # can't write acl
+    _check_bucket_acl_grant_cant_writeacp(bucket_name)
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl w/userid WRITE_ACP')
+@attr(assertion='can write acls, no other r/w')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_bucket_acl_grant_userid_writeacp():
+    bucket_name = _bucket_acl_grant_userid('WRITE_ACP')
+
+    # alt user can't read
+    _check_bucket_acl_grant_cant_read(bucket_name)
+    # can't read acl
+    _check_bucket_acl_grant_cant_readacp(bucket_name)
+    # can't write
+    _check_bucket_acl_grant_cant_write(bucket_name)
+    # can write acl
+    _check_bucket_acl_grant_can_writeacp(bucket_name)
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='set acl w/invalid userid')
+@attr(assertion='fails 400')
+def test_bucket_acl_grant_nonexist_user():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    bad_user_id = '_foo'
+
+    #response = client.get_bucket_acl(Bucket=bucket_name)
+    grant = {'Grantee': {'ID': bad_user_id, 'Type': 'CanonicalUser' }, 'Permission': 'FULL_CONTROL'}
+
+    grant = add_bucket_user_grant(bucket_name, grant)
+
+    e = assert_raises(ClientError, client.put_bucket_acl, Bucket=bucket_name, AccessControlPolicy=grant)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'InvalidArgument')
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='revoke all ACLs')
+@attr(assertion='can: read obj, get/set bucket acl, cannot write objs')
+def test_bucket_acl_no_grants():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_bucket_acl(Bucket=bucket_name)
+    old_grants = response['Grants']
+    policy = {}
+    policy['Owner'] = response['Owner']
+    # clear grants
+    policy['Grants'] = []
+
+    # remove read/write permission
+    response = client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=policy)
+
+    # can read
+    client.get_object(Bucket=bucket_name, Key='foo')
+
+    # can't write
+    check_access_denied(client.put_object, Bucket=bucket_name, Key='baz', Body='a')
+    #check_access_denied(client.put_object, Bucket=bucket_name, Key='baz', Body='')
+
+
+    #TODO figure out why this is failing
+    # owner can read acl
+    client.get_bucket_acl(Bucket=bucket_name)
+
+    # owner can write acl
+    client.put_bucket_acl(Bucket=bucket_name, ACL='private')
+
+    # set policy back to original so that bucket can be cleaned up
+    policy['Grants'] = old_grants
+    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=policy)
+
+def _get_acl_header(user_id=None, perms=None):
+    all_headers = ["read", "write", "read-acp", "write-acp", "full-control"]
+    headers = []
+
+    if user_id == None:
+        user_id = get_alt_user_id()
+
+    if perms != None:
+        for perm in perms:
+            header = ("x-amz-grant-{perm}".format(perm=perm), "id={uid}".format(uid=user_id))
+            headers.append(header)
+
+    else:
+        for perm in all_headers:
+            header = ("x-amz-grant-{perm}".format(perm=perm), "id={uid}".format(uid=user_id))
+            headers.append(header)
+
+    return headers
+
+@attr(resource='object')
+@attr(method='PUT')
+@attr(operation='add all grants to user through headers')
+@attr(assertion='adds all grants individually to second user')
+@attr('fails_on_dho')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_object_header_acl_grants():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    alt_user_id = get_alt_user_id()
+    alt_display_name = get_alt_display_name()
+
+    headers = _get_acl_header()
+
+    def add_headers_before_sign(**kwargs):
+        updated_headers = (kwargs['request'].__dict__['headers'].__dict__['_headers'] + headers)
+        kwargs['request'].__dict__['headers'].__dict__['_headers'] = updated_headers
+
+    client.meta.events.register('before-sign.s3.PutObject', add_headers_before_sign)
+
+    client.put_object(Bucket=bucket_name, Key='foo_key', Body='bar')
+
+    response = client.get_object_acl(Bucket=bucket_name, Key='foo_key')
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='WRITE',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='READ_ACP',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='WRITE_ACP',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+@attr(resource='bucket')
+@attr(method='PUT')
+@attr(operation='add all grants to user through headers')
+@attr(assertion='adds all grants individually to second user')
+@attr('fails_on_dho')
+@attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
+def test_bucket_header_acl_grants():
+    headers = _get_acl_header()
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+
+    headers = _get_acl_header()
+
+    def add_headers_before_sign(**kwargs):
+        updated_headers = (kwargs['request'].__dict__['headers'].__dict__['_headers'] + headers)
+        kwargs['request'].__dict__['headers'].__dict__['_headers'] = updated_headers
+
+    client.meta.events.register('before-sign.s3.CreateBucket', add_headers_before_sign)
+
+    client.create_bucket(Bucket=bucket_name)
+
+    response = client.get_bucket_acl(Bucket=bucket_name)
+    
+    grants = response['Grants']
+    alt_user_id = get_alt_user_id()
+    alt_display_name = get_alt_display_name()
+
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='READ',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='WRITE',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='READ_ACP',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='WRITE_ACP',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            ],
+        )
+
+    alt_client = get_alt_client()
+
+    alt_client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+
+    # set bucket acl to public-read-write so that teardown can work
+    # TODO: rewrite teardown code to make it so I don't need to reset this
+    alt_client.put_bucket_acl(Bucket=bucket_name, ACL='public-read-write')
+    
+
+# This test will fail on DH Objects. DHO allows multiple users with one account, which
+# would violate the uniqueness requirement of a user's email. As such, DHO users are
+# created without an email.
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='add second FULL_CONTROL user')
+@attr(assertion='works for S3, fails for DHO')
+@attr('fails_on_aws') #  <Error><Code>AmbiguousGrantByEmailAddress</Code><Message>The e-mail address you provided is associated with more than one account. Please retry your request using a different identification method or after resolving the ambiguity.</Message>
+def test_bucket_acl_grant_email():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    alt_user_id = get_alt_user_id()
+    alt_display_name = get_alt_display_name()
+    alt_email_address = get_alt_email()
+
+    main_user_id = get_main_user_id()
+    main_display_name = get_main_display_name()
+
+    grant = {'Grantee': {'EmailAddress': alt_email_address, 'Type': 'AmazonCustomerByEmail' }, 'Permission': 'FULL_CONTROL'}
+
+    grant = add_bucket_user_grant(bucket_name, grant)
+
+    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy = grant)
+
+    response = client.get_bucket_acl(Bucket=bucket_name)
+    
+    grants = response['Grants']
+    check_grants(
+        grants,
+        [
+            dict(
+                Permission='FULL_CONTROL',
+                ID=alt_user_id,
+                DisplayName=alt_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+            dict(
+                Permission='FULL_CONTROL',
+                ID=main_user_id,
+                DisplayName=main_display_name,
+                URI=None,
+                EmailAddress=None,
+                Type='CanonicalUser',
+                ),
+        ]
+    )
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='add acl for nonexistent user')
+@attr(assertion='fail 400')
+def test_bucket_acl_grant_email_notexist():
+    # behavior not documented by amazon
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    alt_user_id = get_alt_user_id()
+    alt_display_name = get_alt_display_name()
+    alt_email_address = get_alt_email()
+
+    NONEXISTENT_EMAIL = 'doesnotexist@dreamhost.com.invalid'
+    grant = {'Grantee': {'EmailAddress': NONEXISTENT_EMAIL, 'Type': 'AmazonCustomerByEmail'}, 'Permission': 'FULL_CONTROL'}
+
+    grant = add_bucket_user_grant(bucket_name, grant)
+
+    e = assert_raises(ClientError, client.put_bucket_acl, Bucket=bucket_name, AccessControlPolicy = grant)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'UnresolvableGrantByEmailAddress')
+
+@attr(resource='bucket')
+@attr(method='ACLs')
+@attr(operation='revoke all ACLs')
+@attr(assertion='acls read back as empty')
+def test_bucket_acl_revoke_all():
+    # revoke all access, including the owner's access
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='foo', Body='bar')
+    response = client.get_bucket_acl(Bucket=bucket_name)
+    old_grants = response['Grants']
+    policy = {}
+    policy['Owner'] = response['Owner']
+    # clear grants
+    policy['Grants'] = []
+
+    # remove read/write permission for everyone
+    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=policy)
+
+    response = client.get_bucket_acl(Bucket=bucket_name)
+
+    eq(len(response['Grants']), 0)
+
+    # set policy back to original so that bucket can be cleaned up
+    policy['Grants'] = old_grants
+    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=policy)
+
+# TODO rgw log_bucket.set_as_logging_target() gives 403 Forbidden
+# http://tracker.newdream.net/issues/984
+@attr(resource='bucket.log')
+@attr(method='put')
+@attr(operation='set/enable/disable logging target')
+@attr(assertion='operations succeed')
+@attr('fails_on_rgw')
+def test_logging_toggle():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    main_display_name = get_main_display_name()
+    main_user_id = get_main_user_id()
+
+    status = {'LoggingEnabled': {'TargetBucket': bucket_name, 'TargetGrants': [{'Grantee': {'DisplayName': main_display_name, 'ID': main_user_id,'Type': 'CanonicalUser'},'Permission': 'FULL_CONTROL'}], 'TargetPrefix': 'foologgingprefix'}}
+
+    client.put_bucket_logging(Bucket=bucket_name, BucketLoggingStatus=status)
+    client.get_bucket_logging(Bucket=bucket_name)
+    status = {'LoggingEnabled': {}}
+    client.put_bucket_logging(Bucket=bucket_name, BucketLoggingStatus=status)
+    # NOTE: this does not actually test whether or not logging works
+
+def _setup_access(bucket_acl, object_acl):
+    """
+    Simple test fixture: create a bucket with given ACL, with objects:
+    - a: owning user, given ACL
+    - a2: same object accessed by some other user
+    - b: owning user, default ACL in bucket w/given ACL
+    - b2: same object accessed by a some other user
+    """
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    key1 = 'foo'
+    key2 = 'bar'
+    newkey = 'new'
+
+    client.put_bucket_acl(Bucket=bucket_name, ACL=bucket_acl)
+    client.put_object(Bucket=bucket_name, Key=key1, Body='foocontent')
+    client.put_object_acl(Bucket=bucket_name, Key=key1, ACL=object_acl)
+    client.put_object(Bucket=bucket_name, Key=key2, Body='barcontent')
+
+    return bucket_name, key1, key2, newkey
+
+def get_bucket_key_names(bucket_name):
+    objs_list = get_objects_list(bucket_name)
+    return frozenset(obj for obj in objs_list)
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: private/private')
+@attr(assertion='public has no access to bucket or objects')
+def test_access_bucket_private_object_private():
+    client = get_client()
+    alt_client = get_alt_client()
+    # all the test_access_* tests follow this template
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='private', object_acl='private')
+    # a should be public-read, b gets default (private)
+    # acled object read fail
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key1)
+    # acled object write fail
+    #boto3.set_stream_logger(name='botocore')
+    #data = StringIO('barcontent')
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='')
+    # default object read fail
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key2)
+    # default object write fail
+    #check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
+    # bucket read fail
+    check_access_denied(alt_client.list_objects, Bucket=bucket_name)
+    # bucket write fail
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets')
+@attr(assertion='returns all expected buckets')
+def test_buckets_create_then_list():
+    client = get_client()
+    bucket_names = []
+    for i in xrange(5):
+        bucket_name = get_new_bucket_name()
+        bucket_names.append(bucket_name)
+
+    for name in bucket_names:
+        client.create_bucket(Bucket=name)
+
+    buckets_list = get_buckets_list(client=client)
+
+    for name in bucket_names:
+        if name not in buckets_list:
+            raise RuntimeError("S3 implementation's GET on Service did not return bucket we created: %r", bucket.name)
+
+# Goal 4742!

@@ -11,13 +11,41 @@ port = 8000
 ## say "False" to disable TLS
 is_secure = False
 
+## all the buckets created will start with this prefix;
+## {random} will be filled with random characters to pad
+## the prefix to 30 characters long, and avoid collisions
+bucket_prefix = YOURNAMEHERE-{random}-
+
+[s3 main]
+# display name set in vstart.sh
+display_name = M. Tester
+
+# user_id name set in vstart.sh
+user_id = testid
+
+# Email
+email = tester@ceph.com
+
+api_name = ""
+
 ## AWS access key
 access_key = 0555b35654ad1656d804
 
 ## AWS secret key
 secret_key = h7GhxuBLTrlhVUyxSPUKUV8r/2EI4ngqJxD7iBdBYLhwluN30JaT3Q==
 
-## all the buckets created will start with this prefix;
-## {random} will be filled with random characters to pad
-## the prefix to 30 characters long, and avoid collisions
-bucket_prefix = YOURNAMEHERE-{random}-
+[s3 alt]
+# display name set in vstart.sh
+display_name = john.doe
+## the "alt" user needs to have email set, too
+email = john.doe@example.com
+
+# user_id name set in vstart.sh
+user_id = 56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234
+
+## AWS access key
+access_key = NOPQRSTUVWXYZABCDEFG
+
+## AWS secret key
+secret_key = nopqrstuvwxyzabcdefghijklmnabcdefghijklm
+

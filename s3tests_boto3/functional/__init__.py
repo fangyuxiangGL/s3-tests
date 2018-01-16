@@ -14,6 +14,10 @@ config = bunch.Bunch
 # this will be assigned by setup()
 prefix = None
 
+def get_prefix():
+    assert prefix is not None
+    return prefix
+
 def choose_bucket_prefix(template, max_len=30):
     """
     Choose a prefix for our test buckets, so they're easy to identify.
@@ -97,10 +101,11 @@ def get_delete_markers_list(bucket, client=None):
     return delete_markers
 
 
-def nuke_prefixed_buckets(prefix):
-    endpoint_url = "http://%s:%d" % (config.host, config.port)
+def nuke_prefixed_buckets(prefix, client=None):
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
 
-    client = get_client()
+    if client == None:
+        client = get_client()
 
     buckets = get_buckets_list(client, prefix)
 
@@ -133,17 +138,35 @@ def setup():
 
     if not cfg.defaults():
         raise RuntimeError('Your config file is missing the DEFAULT section!')
+    if not cfg.has_section("s3 main"):
+        raise RuntimeError('Your config file is missing the "s3 main" section!')
+    if not cfg.has_section("s3 alt"):
+        raise RuntimeError('Your config file is missing the "s3 alt" section!')
 
     global prefix
 
     defaults = cfg.defaults()
 
-    config.host = defaults.get("host")
-    config.port = int(defaults.get("port"))
-    config.access_key = defaults.get("access_key")
-    config.secret_key = defaults.get("secret_key")
-    config.is_secure = defaults.get("is_secure")
+    # vars from the DEFAULT section
+    config.default_host = defaults.get("host")
+    config.default_port = int(defaults.get("port"))
+    config.default_is_secure = defaults.get("is_secure")
 
+    # vars from the main section
+    config.main_access_key = cfg.get('s3 main',"access_key")
+    config.main_secret_key = cfg.get('s3 main',"secret_key")
+    config.main_display_name = cfg.get('s3 main',"display_name")
+    config.main_user_id = cfg.get('s3 main',"user_id")
+    config.main_email = cfg.get('s3 main',"email")
+    config.main_api_name = cfg.get('s3 main',"api_name")
+
+    config.alt_access_key = cfg.get('s3 alt',"access_key")
+    config.alt_secret_key = cfg.get('s3 alt',"secret_key")
+    config.alt_display_name = cfg.get('s3 alt',"display_name")
+    config.alt_user_id = cfg.get('s3 alt',"user_id")
+    config.alt_email = cfg.get('s3 alt',"email")
+
+    # vars from the main section
     try:
         template = defaults.get("bucket_prefix")
     except (ConfigParser.NoOptionError):
@@ -155,21 +178,52 @@ def setup():
 def teardown():
     nuke_prefixed_buckets(prefix=prefix)
 
-def get_client(session=boto3):
+def get_client(session=boto3, client_config=None):
+    if client_config == None:
+        client_config = Config(signature_version='s3v4')
 
-    endpoint_url = "http://%s:%d" % (config.host, config.port)
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
 
     client = session.client(service_name='s3',
-                        aws_access_key_id=config.access_key,
-                        aws_secret_access_key=config.secret_key,
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
                         endpoint_url=endpoint_url,
-                        use_ssl=config.is_secure,
-                        verify=False)
+                        use_ssl=config.default_is_secure,
+                        verify=False,
+                        config=client_config)
+    return client
+
+def get_v2_client(session=boto3):
+
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
+
+    client = session.client(service_name='s3',
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
+                        endpoint_url=endpoint_url,
+                        use_ssl=config.default_is_secure,
+                        verify=False,
+                        config=Config(signature_version='s3'))
+    return client
+
+def get_alt_client(session=boto3, client_config=None):
+    if client_config == None:
+        client_config = Config(signature_version='s3v4')
+
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
+
+    client = session.client(service_name='s3',
+                        aws_access_key_id=config.alt_access_key,
+                        aws_secret_access_key=config.alt_secret_key,
+                        endpoint_url=endpoint_url,
+                        use_ssl=config.default_is_secure,
+                        verify=False,
+                        config=client_config)
     return client
 
 def get_anon_client(session=boto3):
 
-    endpoint_url = "http://%s:%d" % (config.host, config.port)
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
 
     client = session.client(service_name='s3',
                         aws_access_key_id='',
@@ -185,6 +239,20 @@ def get_anon_resource():
     resource = boto3.resource('s3')
 
     resource.meta.client.meta.events.register('choose-signer.s3.*', disable_signing)
+    return resource
+
+def get_main_resource():
+
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
+
+    resource = boto3.resource(service_name='s3',
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
+                        endpoint_url=endpoint_url,
+                        use_ssl=config.default_is_secure,
+                        verify=False,
+                        config=Config(signature_version='s3v4'))
+
     return resource
 
 
@@ -212,14 +280,14 @@ def get_new_bucket(session=boto3, name=None, headers=None):
     Always recreates a bucket from scratch. This is useful to also
     reset ACLs and such.
     """
-    endpoint_url = "http://%s:%d" % (config.host, config.port)
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
 
     s3 = session.resource('s3', 
                         use_ssl=False,
                         verify=False,
                         endpoint_url=endpoint_url, 
-                        aws_access_key_id=config.access_key,
-                        aws_secret_access_key=config.secret_key)
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key)
     if name is None:
         name = get_new_bucket_name()
     bucket = s3.Bucket(name)
@@ -227,16 +295,43 @@ def get_new_bucket(session=boto3, name=None, headers=None):
     return bucket
 
 def get_config_is_secure():
-    return config.is_secure
+    return config.default_is_secure
 
 def get_config_host():
-    return config.host
+    return config.default_host
 
 def get_config_port():
-    return config.port
+    return config.default_port
 
-def get_config_aws_access_key():
-    return config.access_key
+def get_main_aws_access_key():
+    return config.main_access_key
 
-def get_config_aws_secret_key():
-    return config.secret_key
+def get_main_aws_secret_key():
+    return config.main_secret_key
+
+def get_main_display_name():
+    return config.main_display_name
+
+def get_main_user_id():
+    return config.main_user_id
+
+def get_main_email():
+    return config.main_email
+
+def get_main_api_name():
+    return config.main_api_name
+
+def get_alt_aws_access_key():
+    return config.alt_access_key
+
+def get_alt_aws_secret_key():
+    return config.alt_secret_key
+
+def get_alt_display_name():
+    return config.alt_display_name
+
+def get_alt_user_id():
+    return config.alt_user_id
+
+def get_alt_email():
+    return config.alt_email
