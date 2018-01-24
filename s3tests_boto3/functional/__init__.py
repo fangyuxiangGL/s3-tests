@@ -45,6 +45,8 @@ def choose_bucket_prefix(template, max_len=30):
 def get_buckets_list(client=None, prefix=None):
     if client == None:
         client = get_client()
+    if prefix == None:
+        prefix = get_prefix()
     response = client.list_buckets()
     bucket_dicts = response['Buckets']
     buckets_list = []
@@ -55,10 +57,14 @@ def get_buckets_list(client=None, prefix=None):
 
     return buckets_list
 
-def get_objects_list(bucket, client=None):
+def get_objects_list(bucket, client=None, prefix=None):
     if client == None:
         client = get_client()
-    response = client.list_objects(Bucket=bucket)
+
+    if prefix == None:
+        response = client.list_objects(Bucket=bucket)
+    else:
+        response = client.list_objects(Bucket=bucket, Prefix=prefix)
     objects_list = []
 
     if 'Contents' in response:
@@ -229,10 +235,24 @@ def get_anon_client(session=boto3):
                         aws_access_key_id='',
                         aws_secret_access_key='',
                         endpoint_url=endpoint_url,
-                        use_ssl=False,
+                        use_ssl=config.default_is_secure,
                         verify=False,
                         config=Config(signature_version=UNSIGNED))
     return client
+
+def get_bad_auth_client(session=boto3, aws_access_key_id='badauth'):
+
+    endpoint_url = "http://%s:%d" % (config.default_host, config.default_port)
+
+    client = session.client(service_name='s3',
+                        aws_access_key_id=aws_access_key_id,
+                        aws_secret_access_key='roflmao',
+                        endpoint_url=endpoint_url,
+                        use_ssl=config.default_is_secure,
+                        verify=False,
+                        config=Config(signature_version='s3v4'))
+    return client
+
 
 def get_anon_resource():
 

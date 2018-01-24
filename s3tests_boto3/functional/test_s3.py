@@ -20,15 +20,21 @@ import sha
 import xml.etree.ElementTree as ET
 import time
 import operator
+import nose
+import os
+import string
+import random
 
 from email.header import decode_header
 
 from .utils import assert_raises
+from .utils import generate_random
 
 from . import (
     get_client,
     get_prefix,
     get_anon_client,
+    get_bad_auth_client,
     get_anon_resource,
     get_new_bucket,
     get_new_bucket_name,
@@ -48,6 +54,8 @@ from . import (
     get_alt_email,
     get_alt_client,
     get_buckets_list,
+    get_objects_list,
+    nuke_prefixed_buckets,
     )
 
 
@@ -637,37 +645,6 @@ def test_bucket_list_maxkeys_invalid():
     status, error_code = _get_status_and_error_code(e.response)
     eq(status, 400)
     eq(error_code, 'InvalidArgument')
-
-#@attr('fails_on_rgw')
-#@attr(resource='bucket')
-#@attr(method='get')
-#@attr(operation='list all keys')
-#@attr(assertion='non-printing max_keys')
-#def test_bucket_list_maxkeys_unreadable():
-    #TODO: Remove this test and document it 
-    # Boto3 is url encoding the string before it is ever sent out
-    # thus this test should be removed, because the unreadable string
-    # never makes it to the server
-    #key_names = ['bar', 'baz', 'foo', 'quxx']
-    #bucket_name = _create_objects(keys=key_names)
-    #client = get_client()
-
-    # adds unreadable max keys to url
-    # before list_objects is called
-    #def add_unreadable_maxkeys(**kwargs):
-        #kwargs['params']['url'] += "&max-keys=%0A"
-    #client.meta.events.register('before-call.s3.ListObjects', add_unreadable_maxkeys)
-
-    #e = assert_raises(ClientError, client.list_objects, Bucket=bucket_name)
-    #status, error_code = _get_status_and_error_code(e.response)
-    # COMMENT FROM BOTO2 TEST:
-    # some proxies vary the case
-    # Weird because you can clearly see an InvalidArgument error code. What's
-    # also funny is the Amazon tells us that it's not an interger or within an
-    # integer range. Is 'blah' in the integer range?
-    #eq(status, 403)
-    #eq(error_code, 'SignatureDoesNotMatch')
-
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -2908,6 +2885,7 @@ def test_object_raw_authenticated():
 @attr(assertion='succeeds')
 @attr('fails_on_rgw')
 def test_object_raw_response_headers():
+    # TODO: this suddenly passes on the rgw, what gives?
     bucket_name = _setup_bucket_object_acl('private', 'private')
 
     client = get_client()
@@ -4017,7 +3995,7 @@ def add_obj_user_grant(bucket_name, key, grant):
     main_user_id = get_main_user_id()
     main_display_name = get_main_display_name()
 
-    response = client.get_object_acl(Bucket=bucket_name, Key='foo')
+    response = client.get_object_acl(Bucket=bucket_name, Key=key)
 
     grants = response['Grants']
     grants.append(grant)
@@ -4426,19 +4404,19 @@ def test_bucket_acl_no_grants():
 
     # can't write
     check_access_denied(client.put_object, Bucket=bucket_name, Key='baz', Body='a')
-    #check_access_denied(client.put_object, Bucket=bucket_name, Key='baz', Body='')
 
-
-    #TODO figure out why this is failing
+    #TODO fix this test once a fix is in for same issues in
+    # test_access_bucket_private_object_private
+    client2 = get_client
     # owner can read acl
-    client.get_bucket_acl(Bucket=bucket_name)
+    client2.get_bucket_acl(Bucket=bucket_name)
 
     # owner can write acl
-    client.put_bucket_acl(Bucket=bucket_name, ACL='private')
+    client2.put_bucket_acl(Bucket=bucket_name, ACL='private')
 
     # set policy back to original so that bucket can be cleaned up
     policy['Grants'] = old_grants
-    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=policy)
+    client2.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=policy)
 
 def _get_acl_header(user_id=None, perms=None):
     all_headers = ["read", "write", "read-acp", "write-acp", "full-control"]
@@ -4773,25 +4751,219 @@ def get_bucket_key_names(bucket_name):
 @attr(operation='set bucket/object acls: private/private')
 @attr(assertion='public has no access to bucket or objects')
 def test_access_bucket_private_object_private():
-    client = get_client()
-    alt_client = get_alt_client()
     # all the test_access_* tests follow this template
     bucket_name, key1, key2, newkey = _setup_access(bucket_acl='private', object_acl='private')
-    # a should be public-read, b gets default (private)
+
+    alt_client = get_alt_client()
     # acled object read fail
     check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key1)
-    # acled object write fail
-    #boto3.set_stream_logger(name='botocore')
-    #data = StringIO('barcontent')
-    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='')
     # default object read fail
     check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key2)
-    # default object write fail
-    #check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
     # bucket read fail
     check_access_denied(alt_client.list_objects, Bucket=bucket_name)
+
+    # acled object write fail
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='barcontent')
+    # NOTE: The above put's causes the connection to go bad, therefore the client can't be used 
+    # anymore. This can be solved either by:
+    # 1) putting an empty string ('') in the 'Body' field of those put_object calls
+    # 2) getting a new client hence the creation of alt_client{2,3} for the tests below
+    # TODO: Test it from another host and on AWS, Report this to Amazon, if findings are identical
+
+    alt_client2 = get_alt_client()
+    # default object write fail
+    check_access_denied(alt_client2.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
     # bucket write fail
-    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+    alt_client3 = get_alt_client()
+    check_access_denied(alt_client3.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: private/public-read')
+@attr(assertion='public can only read readable object')
+def test_access_bucket_private_object_publicread():
+
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='private', object_acl='public-read')
+    alt_client = get_alt_client()
+    response = alt_client.get_object(Bucket=bucket_name, Key=key1)
+
+    body = response['Body'].read()
+
+    # a should be public-read, b gets default (private)
+    eq(body, 'foocontent')
+
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='foooverwrite')
+    alt_client2 = get_alt_client()
+    check_access_denied(alt_client2.get_object, Bucket=bucket_name, Key=key2)
+    check_access_denied(alt_client2.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    alt_client3 = get_alt_client()
+    check_access_denied(alt_client3.list_objects, Bucket=bucket_name)
+    check_access_denied(alt_client3.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: private/public-read/write')
+@attr(assertion='public can only read the readable object')
+def test_access_bucket_private_object_publicreadwrite():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='private', object_acl='public-read-write')
+    alt_client = get_alt_client()
+    response = alt_client.get_object(Bucket=bucket_name, Key=key1)
+
+    body = response['Body'].read()
+
+    # a should be public-read-only ... because it is in a private bucket
+    # b gets default (private)
+    eq(body, 'foocontent')
+
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='foooverwrite')
+    alt_client2 = get_alt_client()
+    check_access_denied(alt_client2.get_object, Bucket=bucket_name, Key=key2)
+    check_access_denied(alt_client2.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    alt_client3 = get_alt_client()
+    check_access_denied(alt_client3.list_objects, Bucket=bucket_name)
+    check_access_denied(alt_client3.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: public-read/private')
+@attr(assertion='public can only list the bucket')
+def test_access_bucket_publicread_object_private():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='public-read', object_acl='private')
+    alt_client = get_alt_client()
+
+    # a should be private, b gets default (private)
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key1)
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='barcontent')
+
+    alt_client2 = get_alt_client()
+    check_access_denied(alt_client2.get_object, Bucket=bucket_name, Key=key2)
+    check_access_denied(alt_client2.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    alt_client3 = get_alt_client()
+
+    objs = get_objects_list(bucket=bucket_name, client=alt_client3)
+
+    eq(objs, [u'bar', u'foo'])
+    check_access_denied(alt_client3.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: public-read/public-read')
+@attr(assertion='public can read readable objects and list bucket')
+def test_access_bucket_publicread_object_publicread():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='public-read', object_acl='public-read')
+    alt_client = get_alt_client()
+
+    response = alt_client.get_object(Bucket=bucket_name, Key=key1)
+
+    body = response['Body'].read()
+    # a should be public-read, b gets default (private)
+    eq(body, 'foocontent')
+
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='foooverwrite')
+
+    alt_client2 = get_alt_client()
+    check_access_denied(alt_client2.get_object, Bucket=bucket_name, Key=key2)
+    check_access_denied(alt_client2.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    alt_client3 = get_alt_client()
+
+    objs = get_objects_list(bucket=bucket_name, client=alt_client3)
+
+    eq(objs, [u'bar', u'foo'])
+    check_access_denied(alt_client3.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: public-read/public-read-write')
+@attr(assertion='public can read readable objects and list bucket')
+def test_access_bucket_publicread_object_publicreadwrite():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='public-read', object_acl='public-read-write')
+    alt_client = get_alt_client()
+
+    response = alt_client.get_object(Bucket=bucket_name, Key=key1)
+
+    body = response['Body'].read()
+    # a should be public-read-only ... because it is in a r/o bucket
+    # b gets default (private)
+    eq(body, 'foocontent')
+
+    check_access_denied(alt_client.put_object, Bucket=bucket_name, Key=key1, Body='foooverwrite')
+
+    alt_client2 = get_alt_client()
+    check_access_denied(alt_client2.get_object, Bucket=bucket_name, Key=key2)
+    check_access_denied(alt_client2.put_object, Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    alt_client3 = get_alt_client()
+
+    objs = get_objects_list(bucket=bucket_name, client=alt_client3)
+
+    eq(objs, [u'bar', u'foo'])
+    check_access_denied(alt_client3.put_object, Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: public-read-write/private')
+@attr(assertion='private objects cannot be read, but can be overwritten')
+def test_access_bucket_publicreadwrite_object_private():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='public-read-write', object_acl='private')
+    alt_client = get_alt_client()
+
+    # a should be private, b gets default (private)
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key1)
+    alt_client.put_object(Bucket=bucket_name, Key=key1, Body='barcontent')
+
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key2)
+    alt_client.put_object(Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    objs = get_objects_list(bucket=bucket_name, client=alt_client)
+    eq(objs, [u'bar', u'foo'])
+    alt_client.put_object(Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: public-read-write/public-read')
+@attr(assertion='private objects cannot be read, but can be overwritten')
+def test_access_bucket_publicreadwrite_object_publicread():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='public-read-write', object_acl='public-read')
+    alt_client = get_alt_client()
+
+    # a should be public-read, b gets default (private)
+    response = alt_client.get_object(Bucket=bucket_name, Key=key1)
+
+    body = response['Body'].read()
+    eq(body, 'foocontent')
+    alt_client.put_object(Bucket=bucket_name, Key=key1, Body='barcontent')
+
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key2)
+    alt_client.put_object(Bucket=bucket_name, Key=key2, Body='baroverwrite')
+
+    objs = get_objects_list(bucket=bucket_name, client=alt_client)
+    eq(objs, [u'bar', u'foo'])
+    alt_client.put_object(Bucket=bucket_name, Key=newkey, Body='newcontent')
+
+@attr(resource='object')
+@attr(method='ACLs')
+@attr(operation='set bucket/object acls: public-read-write/public-read-write')
+@attr(assertion='private objects cannot be read, but can be overwritten')
+def test_access_bucket_publicreadwrite_object_publicreadwrite():
+    bucket_name, key1, key2, newkey = _setup_access(bucket_acl='public-read-write', object_acl='public-read-write')
+    alt_client = get_alt_client()
+    response = alt_client.get_object(Bucket=bucket_name, Key=key1)
+    body = response['Body'].read()
+
+    # a should be public-read-write, b gets default (private)
+    eq(body, 'foocontent')
+    alt_client.put_object(Bucket=bucket_name, Key=key1, Body='foooverwrite')
+    check_access_denied(alt_client.get_object, Bucket=bucket_name, Key=key2)
+    alt_client.put_object(Bucket=bucket_name, Key=key2, Body='baroverwrite')
+    objs = get_objects_list(bucket=bucket_name, client=alt_client)
+    eq(objs, [u'bar', u'foo'])
+    alt_client.put_object(Bucket=bucket_name, Key=newkey, Body='newcontent')
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -4807,10 +4979,725 @@ def test_buckets_create_then_list():
     for name in bucket_names:
         client.create_bucket(Bucket=name)
 
-    buckets_list = get_buckets_list(client=client)
+    response = client.list_buckets()
+    bucket_dicts = response['Buckets']
+    buckets_list = []
+
+    buckets_list = get_buckets_list()
 
     for name in bucket_names:
         if name not in buckets_list:
             raise RuntimeError("S3 implementation's GET on Service did not return bucket we created: %r", bucket.name)
 
-# Goal 4742!
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets (anonymous)')
+@attr(assertion='succeeds')
+@attr('fails_on_aws')
+def test_list_buckets_anonymous():
+    # Get a connection with bad authorization, then change it to be our new Anonymous auth mechanism,
+    # emulating standard HTTP access.
+    #
+    # While it may have been possible to use httplib directly, doing it this way takes care of also
+    # allowing us to vary the calling format in testing.
+    anon_client = get_anon_client()
+    response = anon_client.list_buckets()
+    eq(len(response['Buckets']), 0)
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets (bad auth)')
+@attr(assertion='fails 403')
+def test_list_buckets_invalid_auth():
+    bad_auth_client = get_bad_auth_client()
+    e = assert_raises(ClientError, bad_auth_client.list_buckets)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'InvalidAccessKeyId')
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets (bad auth)')
+@attr(assertion='fails 403')
+def test_list_buckets_bad_auth():
+    main_access_key = get_main_aws_access_key()
+    bad_auth_client = get_bad_auth_client(aws_access_key_id=main_access_key)
+    e = assert_raises(ClientError, bad_auth_client.list_buckets)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'SignatureDoesNotMatch')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create bucket')
+@attr(assertion='name starts with alphabetic works')
+# this test goes outside the user-configure prefix because it needs to
+# control the initial character of the bucket name
+@nose.with_setup(
+    setup=lambda: nuke_prefixed_buckets(prefix='a'+get_prefix()),
+    teardown=lambda: nuke_prefixed_buckets(prefix='a'+get_prefix()),
+    )
+def test_bucket_create_naming_good_starts_alpha():
+    check_good_bucket_name('foo', _prefix='a'+get_prefix())
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create bucket')
+@attr(assertion='name starts with numeric works')
+# this test goes outside the user-configure prefix because it needs to
+# control the initial character of the bucket name
+@nose.with_setup(
+    setup=lambda: nuke_prefixed_buckets(prefix='0'+get_prefix()),
+    teardown=lambda: nuke_prefixed_buckets(prefix='0'+get_prefix()),
+    )
+def test_bucket_create_naming_good_starts_digit():
+    check_good_bucket_name('foo', _prefix='0'+get_prefix())
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create bucket')
+@attr(assertion='name containing dot works')
+def test_bucket_create_naming_good_contains_period():
+    check_good_bucket_name('aaa.111')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create bucket')
+@attr(assertion='name containing hyphen works')
+def test_bucket_create_naming_good_contains_hyphen():
+    check_good_bucket_name('aaa-111')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='create bucket with objects and recreate it')
+@attr(assertion='bucket recreation not overriding index')
+def test_bucket_recreate_not_overriding():
+    key_names = ['mykey1', 'mykey2']
+    bucket_name = _create_objects(keys=key_names)
+
+    objs_list = get_objects_list(bucket_name)
+    eq(key_names, objs_list)
+
+    client = get_client()
+    client.create_bucket(Bucket=bucket_name)
+
+    objs_list = get_objects_list(bucket_name)
+    eq(key_names, objs_list)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='create and list objects with special names')
+@attr(assertion='special names work')
+def test_bucket_create_special_key_names():
+    key_names = [
+        ' ',
+        '"',
+        '$',
+        '%',
+        '&',
+        '\'',
+        '<',
+        '>',
+        '_',
+        '_ ',
+        '_ _',
+        '__',
+    ]
+
+    bucket_name = _create_objects(keys=key_names)
+
+    objs_list = get_objects_list(bucket_name)
+    eq(key_names, objs_list)
+
+    client = get_client()
+
+    for name in key_names:
+        eq((name in objs_list), True)
+        response = client.get_object(Bucket=bucket_name, Key=name)
+        body = response['Body']
+        got = body.read()
+        eq(name, got)
+        client.put_object_acl(Bucket=bucket_name, Key=name, ACL='private')
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='create and list objects with underscore as prefix, list using prefix')
+@attr(assertion='listing works correctly')
+def test_bucket_list_special_prefix():
+    key_names = ['_bla/1', '_bla/2', '_bla/3', '_bla/4', 'abcd']
+    bucket_name = _create_objects(keys=key_names)
+
+    objs_list = get_objects_list(bucket_name)
+
+    eq(len(objs_list), 5)
+
+    objs_list = get_objects_list(bucket_name, prefix='_bla/')
+    eq(len(objs_list), 4)
+
+class FakeFile(object):
+    """
+    file that simulates seek, tell, and current character
+    """
+    def __init__(self, char='A', interrupt=None):
+        self.offset = 0
+        self.char = char
+        self.interrupt = interrupt
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        if whence == os.SEEK_SET:
+            self.offset = offset
+        elif whence == os.SEEK_END:
+            self.offset = self.size + offset;
+        elif whence == os.SEEK_CUR:
+            self.offset += offset
+
+    def tell(self):
+        return self.offset
+
+class FakeWriteFile(FakeFile):
+    """
+    file that simulates interruptable reads of constant data
+    """
+    def __init__(self, size, char='A', interrupt=None):
+        FakeFile.__init__(self, char, interrupt)
+        self.size = size
+
+    def read(self, size=-1):
+        if size < 0:
+            size = self.size - self.offset
+        count = min(size, self.size - self.offset)
+        self.offset += count
+
+        # Sneaky! do stuff before we return (the last time)
+        if self.interrupt != None and self.offset == self.size and count > 0:
+            self.interrupt()
+
+        return self.char*count
+
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy zero sized object in same bucket')
+@attr(assertion='works')
+def test_object_copy_zero_size():
+    key = 'foo123bar'
+    bucket_name = _create_objects(keys=[key])
+    fp_a = FakeWriteFile(0, '')
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key=key, Body=fp_a)
+
+    copy_source = {'Bucket': bucket_name, 'Key': key}
+
+    client.copy(copy_source, bucket_name, 'bar321foo')
+    response = client.get_object(Bucket=bucket_name, Key='bar321foo')
+    eq(response['ContentLength'], 0)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object in same bucket')
+@attr(assertion='works')
+def test_object_copy_same_bucket():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo123bar', Body='foo')
+
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+
+    client.copy(copy_source, bucket_name, 'bar321foo')
+
+    response = client.get_object(Bucket=bucket_name, Key='bar321foo')
+    body = response['Body']
+    got = body.read()
+    eq('foo', got)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object with content-type')
+@attr(assertion='works')
+def test_object_copy_verify_contenttype():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    content_type = 'text/bla'
+    client.put_object(Bucket=bucket_name, ContentType=content_type, Key='foo123bar', Body='foo')
+
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+
+    client.copy(copy_source, bucket_name, 'bar321foo')
+
+    response = client.get_object(Bucket=bucket_name, Key='bar321foo')
+    body = response['Body']
+    got = body.read()
+    eq('foo', got)
+    response_content_type = response['ContentType']
+    eq(response_content_type, content_type)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object to itself')
+@attr(assertion='fails')
+def test_object_copy_to_itself():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo123bar', Body='foo')
+
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+
+    e = assert_raises(ClientError, client.copy, copy_source, bucket_name, 'foo123bar')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'InvalidRequest')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='modify object metadata by copying')
+@attr(assertion='fails')
+def test_object_copy_to_itself_with_metadata():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    client.put_object(Bucket=bucket_name, Key='foo123bar', Body='foo')
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+    metadata = {'foo': 'bar'}
+
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key='foo123bar', Metadata=metadata, MetadataDirective='REPLACE')
+    response = client.get_object(Bucket=bucket_name, Key='foo123bar')
+    eq(response['Metadata'], metadata)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object from different bucket')
+@attr(assertion='works')
+def test_object_copy_diff_bucket():
+    bucket_name1 = get_new_bucket_name()
+    get_new_bucket(name=bucket_name1)
+    bucket_name2 = get_new_bucket_name()
+    get_new_bucket(name=bucket_name2)
+
+    client = get_client()
+    client.put_object(Bucket=bucket_name1, Key='foo123bar', Body='foo')
+
+    copy_source = {'Bucket': bucket_name1, 'Key': 'foo123bar'}
+
+    client.copy(copy_source, bucket_name2, 'bar321foo')
+
+    response = client.get_object(Bucket=bucket_name2, Key='bar321foo')
+    body = response['Body']
+    got = body.read()
+    eq('foo', got)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy to an inaccessible bucket')
+@attr(assertion='fails w/AttributeError')
+def test_object_copy_not_owned_bucket():
+    client = get_client()
+    alt_client = get_alt_client()
+    bucket_name1 = get_new_bucket_name()
+    bucket_name2 = get_new_bucket_name()
+    client.create_bucket(Bucket=bucket_name1)
+    alt_client.create_bucket(Bucket=bucket_name2)
+
+    client.put_object(Bucket=bucket_name1, Key='foo123bar', Body='foo')
+
+    copy_source = {'Bucket': bucket_name1, 'Key': 'foo123bar'}
+
+    e = assert_raises(ClientError, client.copy, copy_source, bucket_name2, 'bar321foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'AccessDenied')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy a non-owned object in a non-owned bucket, but with perms')
+@attr(assertion='works')
+def test_object_copy_not_owned_object_bucket():
+    client = get_client()
+    alt_client = get_alt_client()
+    bucket_name = get_new_bucket_name()
+    client.create_bucket(Bucket=bucket_name)
+    client.put_object(Bucket=bucket_name, Key='foo123bar', Body='foo')
+
+    alt_user_id = get_alt_user_id()
+
+    grant = {'Grantee': {'ID': alt_user_id, 'Type': 'CanonicalUser' }, 'Permission': 'FULL_CONTROL'}
+    grants = add_obj_user_grant(bucket_name, 'foo123bar', grant)
+    client.put_object_acl(Bucket=bucket_name, Key='foo123bar', AccessControlPolicy=grants)
+
+    grant = add_bucket_user_grant(bucket_name, grant)
+    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=grant)
+
+    alt_client.get_object(Bucket=bucket_name, Key='foo123bar')
+
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+    alt_client.copy(copy_source, bucket_name, 'bar321foo')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object and change acl')
+@attr(assertion='works')
+def test_object_copy_canned_acl():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    alt_client = get_alt_client()
+    client.put_object(Bucket=bucket_name, Key='foo123bar', Body='foo')
+
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key='bar321foo', ACL='public-read')
+    # check ACL is applied by doing GET from another user
+    alt_client.get_object(Bucket=bucket_name, Key='bar321foo')
+
+
+    metadata={'abc': 'def'}
+    copy_source = {'Bucket': bucket_name, 'Key': 'bar321foo'}
+    client.copy_object(ACL='public-read', Bucket=bucket_name, CopySource=copy_source, Key='foo123bar', Metadata=metadata, MetadataDirective='REPLACE')
+
+    # check ACL is applied by doing GET from another user
+    alt_client.get_object(Bucket=bucket_name, Key='foo123bar')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object and retain metadata')
+def test_object_copy_retaining_metadata():
+    for size in [3, 1024 * 1024]:
+        bucket_name = get_new_bucket_name()
+        get_new_bucket(name=bucket_name)
+        client = get_client()
+        content_type = 'audio/ogg'
+
+        metadata = {'key1': 'value1', 'key2': 'value2'}
+        client.put_object(Bucket=bucket_name, Key='foo123bar', Metadata=metadata, ContentType=content_type, Body=str(bytearray(size)))
+
+        copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+        client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key='bar321foo')
+
+        response = client.get_object(Bucket=bucket_name, Key='bar321foo')
+        eq(content_type, response['ContentType'])
+        eq(metadata, response['Metadata'])
+        eq(size, response['ContentLength'])
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object and replace metadata')
+def test_object_copy_replacing_metadata():
+    for size in [3, 1024 * 1024]:
+        bucket_name = get_new_bucket_name()
+        get_new_bucket(name=bucket_name)
+        client = get_client()
+        content_type = 'audio/ogg'
+
+        metadata = {'key1': 'value1', 'key2': 'value2'}
+        client.put_object(Bucket=bucket_name, Key='foo123bar', Metadata=metadata, ContentType=content_type, Body=str(bytearray(size)))
+
+        metadata = {'key3': 'value3', 'key2': 'value2'}
+        content_type = 'audio/mpeg'
+
+        copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+        client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key='bar321foo', Metadata=metadata, MetadataDirective='REPLACE', ContentType=content_type)
+
+        response = client.get_object(Bucket=bucket_name, Key='bar321foo')
+        eq(content_type, response['ContentType'])
+        eq(metadata, response['Metadata'])
+        eq(size, response['ContentLength'])
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy from non-existent bucket')
+def test_object_copy_bucket_not_found():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    copy_source = {'Bucket': bucket_name + "-fake", 'Key': 'foo123bar'}
+    e = assert_raises(ClientError, client.copy, copy_source, bucket_name, 'bar321foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy from non-existent object')
+def test_object_copy_key_not_found():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
+    e = assert_raises(ClientError, client.copy, copy_source, bucket_name, 'bar321foo')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='copy object to/from versioned bucket')
+@attr(assertion='works')
+def test_object_copy_versioned_bucket():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    check_configure_versioning_retry(bucket_name, True, "Enabled")
+    size = 1*1024*124
+    data = str(bytearray(size))
+    key1 = 'foo123bar'
+    client.put_object(Bucket=bucket_name, Key=key1, Body=data)
+
+    response = client.get_object(Bucket=bucket_name, Key=key1)
+    version_id = response['VersionId']
+
+    # copy object in the same bucket
+    copy_source = {'Bucket': bucket_name, 'Key': key1, 'VersionId': version_id}
+    key2 = 'bar321foo'
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key=key2)
+    response = client.get_object(Bucket=bucket_name, Key=key2)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(size, response['ContentLength'])
+
+
+    # second copy
+    version_id2 = response['VersionId']
+    copy_source = {'Bucket': bucket_name, 'Key': key2, 'VersionId': version_id2}
+    key3 = 'bar321foo2'
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key=key3)
+    response = client.get_object(Bucket=bucket_name, Key=key3)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(size, response['ContentLength'])
+
+    # copy to another versioned bucket
+    bucket_name2 = get_new_bucket_name()
+    get_new_bucket(name=bucket_name2)
+    check_configure_versioning_retry(bucket_name2, True, "Enabled")
+    copy_source = {'Bucket': bucket_name, 'Key': key1, 'VersionId': version_id}
+    key4 = 'bar321foo3'
+    client.copy_object(Bucket=bucket_name2, CopySource=copy_source, Key=key4)
+    response = client.get_object(Bucket=bucket_name2, Key=key4)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(size, response['ContentLength'])
+
+    # copy to another non versioned bucket
+    bucket_name3 = get_new_bucket_name()
+    get_new_bucket(name=bucket_name3)
+    copy_source = {'Bucket': bucket_name, 'Key': key1, 'VersionId': version_id}
+    key5 = 'bar321foo4'
+    client.copy_object(Bucket=bucket_name3, CopySource=copy_source, Key=key5)
+    response = client.get_object(Bucket=bucket_name3, Key=key5)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(size, response['ContentLength'])
+
+    # copy from a non versioned bucket
+    copy_source = {'Bucket': bucket_name3, 'Key': key5}
+    key6 = 'foo123bar2'
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key=key6)
+    response = client.get_object(Bucket=bucket_name, Key=key6)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(size, response['ContentLength'])
+
+def generate_random(size, part_size=5*1024*1024):
+    """
+    Generate the specified number random data.
+    (actually each MB is a repetition of the first KB)
+    """
+    chunk = 1024
+    allowed = string.ascii_letters
+    for x in range(0, size, part_size):
+        strpart = ''.join([allowed[random.randint(0, len(allowed) - 1)] for _ in xrange(chunk)])
+        s = ''
+        left = size - x
+        this_part_size = min(left, part_size)
+        for y in range(this_part_size / chunk):
+            s = s + strpart
+        if this_part_size > len(s):
+            s = s + strpart[0:this_part_size - len(s)]
+        yield s
+        if (x == size):
+            return
+
+def _multipart_upload(bucket_name, key, size, part_size=5*1024*1024, client=None, content_type=None, metadata=None, resend_parts=[]):
+    """
+    generate a multi-part upload for a random file of specifed size,
+    if requested, generate a list of the parts
+    return the upload descriptor
+    """
+    if client == None:
+        client = get_client()
+
+
+    if content_type == None and metadata == None:
+        response = client.create_multipart_upload(Bucket=bucket_name, Key=key)
+    else:
+        response = client.create_multipart_upload(Bucket=bucket_name, Key=key, Metadata=metadata, ContentType=content_type)
+
+    upload_id = response['UploadId']
+    s = ''
+    parts = []
+    for i, part in enumerate(generate_random(size, part_size)):
+        # part_num is necessary because PartNumber for upload_part and in parts must start at 1 and i starts at 0
+        part_num = i+1
+        s += part
+        response = client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=part_num, Body=part)
+        parts.append({'ETag': response['ETag'].strip('"'), 'PartNumber': part_num})
+        if i in resend_parts:
+            client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=part_num, Body=part)
+
+    return (upload_id, s, parts)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='test copy object of a multipart upload')
+@attr(assertion='successful')
+def test_object_copy_versioning_multipart_upload():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    check_configure_versioning_retry(bucket_name, True, "Enabled")
+
+    key1 = "srcmultipart"
+    key1_metadata = {'foo': 'bar'}
+    content_type = 'text/bla'
+    objlen = 30 * 1024 * 1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key1, size=objlen, content_type=content_type, metadata=key1_metadata)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key1, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    response = client.get_object(Bucket=bucket_name, Key=key1)
+    key1_size = response['ContentLength']
+    version_id = response['VersionId']
+
+    # copy object in the same bucket
+    copy_source = {'Bucket': bucket_name, 'Key': key1, 'VersionId': version_id}
+    key2 = 'dstmultipart'
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key=key2)
+    response = client.get_object(Bucket=bucket_name, Key=key2)
+    version_id2 = response['VersionId']
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(key1_size, response['ContentLength'])
+    eq(key1_metadata, response['Metadata'])
+    eq(content_type, response['ContentType'])
+
+    # second copy
+    copy_source = {'Bucket': bucket_name, 'Key': key2, 'VersionId': version_id2}
+    key3 = 'dstmultipart2'
+    client.copy_object(Bucket=bucket_name, CopySource=copy_source, Key=key3)
+    response = client.get_object(Bucket=bucket_name, Key=key3)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(key1_size, response['ContentLength'])
+    eq(key1_metadata, response['Metadata'])
+    eq(content_type, response['ContentType'])
+
+    # copy to another versioned bucket
+    bucket_name2 = get_new_bucket_name()
+    get_new_bucket(name=bucket_name2)
+    check_configure_versioning_retry(bucket_name2, True, "Enabled")
+
+    copy_source = {'Bucket': bucket_name, 'Key': key1, 'VersionId': version_id}
+    key4 = 'dstmultipart3'
+    client.copy_object(Bucket=bucket_name2, CopySource=copy_source, Key=key4)
+    response = client.get_object(Bucket=bucket_name2, Key=key4)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(key1_size, response['ContentLength'])
+    eq(key1_metadata, response['Metadata'])
+    eq(content_type, response['ContentType'])
+
+    # copy to another non versioned bucket
+    bucket_name3 = get_new_bucket_name()
+    get_new_bucket(name=bucket_name3)
+    copy_source = {'Bucket': bucket_name, 'Key': key1, 'VersionId': version_id}
+    key5 = 'dstmultipart4'
+    client.copy_object(Bucket=bucket_name3, CopySource=copy_source, Key=key5)
+    response = client.get_object(Bucket=bucket_name3, Key=key5)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(key1_size, response['ContentLength'])
+    eq(key1_metadata, response['Metadata'])
+    eq(content_type, response['ContentType'])
+
+    # copy from a non versioned bucket
+    copy_source = {'Bucket': bucket_name3, 'Key': key5}
+    key6 = 'dstmultipart5'
+    client.copy_object(Bucket=bucket_name3, CopySource=copy_source, Key=key6)
+    response = client.get_object(Bucket=bucket_name3, Key=key6)
+    body = response['Body']
+    got = body.read()
+    eq(data, got)
+    eq(key1_size, response['ContentLength'])
+    eq(key1_metadata, response['Metadata'])
+    eq(content_type, response['ContentType'])
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check multipart upload without parts')
+def test_multipart_upload_empty():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    key1 = "mymultipart"
+    objlen = 0
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key1, size=objlen)
+    e = assert_raises(ClientError, client.complete_multipart_upload,Bucket=bucket_name, Key=key1, UploadId=upload_id)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'MalformedXML')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check multipart uploads with single small part')
+def test_multipart_upload_small():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    key1 = "mymultipart"
+    objlen = 1
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key1, size=objlen)
+    response = client.complete_multipart_upload(Bucket=bucket_name, Key=key1, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    response = client.get_object(Bucket=bucket_name, Key=key1)
+    eq(response['ContentLength'], objlen)
+
+def _create_key_with_random_content(keyname, size=7*1024*1024, bucket_name=None, client=None):
+    if bucket_name is None:
+        bucket_name = get_new_bucket_name()
+        get_new_bucket(name=bucket_name)
+
+    if client == None:
+        client = get_client()
+
+    data = StringIO(str(generate_random(size, size).next()))
+    client.put_object(Bucket=bucket_name, Key=keyname, Body=data)
+
+    return bucket_name
+
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check multipart copies with single small part')
+def test_multipart_copy_small():
+    src_key = 'foo'
+    src_bucket_name = _create_key_with_random_content(src_key)
+
+    dest_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=dest_bucket_name)
+    dest_keyname = "mymultipart"
+
+
+
+# Goal 5681!
