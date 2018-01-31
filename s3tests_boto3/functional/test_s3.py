@@ -5686,6 +5686,55 @@ def _create_key_with_random_content(keyname, size=7*1024*1024, bucket_name=None,
 
     return bucket_name
 
+def _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size, client=None, part_size=5*1024*1024, version_id=None):
+
+    if(client == None):
+        client = get_client()
+
+    response = client.create_multipart_upload(Bucket=dest_bucket_name, Key=dest_key)
+    upload_id = response['UploadId']
+
+    if(version_id == None):
+        copy_source = {'Bucket': src_bucket_name, 'Key': src_key}
+    else:
+        copy_source = {'Bucket': src_bucket_name, 'Key': src_key, 'VersionId': version_id}
+
+    parts = []
+
+    i = 0
+    for start_offset in range(0, size, part_size):
+        end_offset = min(start_offset + part_size - 1, size - 1)
+        part_num = i+1
+        copy_source_range = 'bytes={start}-{end}'.format(start=start_offset, end=end_offset) 
+        response = client.upload_part_copy(Bucket=dest_bucket_name, Key=dest_key, CopySource=copy_source, PartNumber=part_num, UploadId=upload_id, CopySourceRange=copy_source_range)
+        parts.append({'ETag': response['CopyPartResult'][u'ETag'], 'PartNumber': part_num})
+        i = i+1
+
+    return (upload_id, parts)
+
+def _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name, version_id=None):
+    client = get_client()
+
+    if(version_id == None):
+        response = client.get_object(Bucket=src_bucket_name, Key=src_key)
+    else:
+        response = client.get_object(Bucket=src_bucket_name, Key=src_key, VersionId=version_id)
+    src_size = response['ContentLength']
+
+    response = client.get_object(Bucket=dest_bucket_name, Key=dest_key)
+    dest_size = response['ContentLength']
+    body = response['Body']
+    dest_data = body.read()
+    assert(src_size >= dest_size)
+
+    r = 'bytes={s}-{e}'.format(s=0, e=dest_size-1)
+    if(version_id == None):
+        response = client.get_object(Bucket=src_bucket_name, Key=src_key, Range=r)
+    else:
+        response = client.get_object(Bucket=src_bucket_name, Key=src_key, Range=r, VersionId=version_id)
+    body = response['Body']
+    src_data = body.read()
+    eq(src_data, dest_data)
 
 @attr(resource='object')
 @attr(method='put')
@@ -5696,8 +5745,241 @@ def test_multipart_copy_small():
 
     dest_bucket_name = get_new_bucket_name()
     get_new_bucket(name=dest_bucket_name)
-    dest_keyname = "mymultipart"
+    dest_key = "mymultipart"
+    size = 1
+    client = get_client()
 
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
 
+    response = client.get_object(Bucket=dest_bucket_name, Key=dest_key)
+    eq(size, response['ContentLength'])
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
 
-# Goal 5681!
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check multipart copies with an invalid range')
+def test_multipart_copy_invalid_range():
+    client = get_client()
+    src_key = 'source'
+    src_bucket_name = _create_key_with_random_content(src_key, size=5)
+
+    response = client.create_multipart_upload(Bucket=src_bucket_name, Key='dest')
+    upload_id = response['UploadId']
+
+    copy_source = {'Bucket': src_bucket_name, 'Key': src_key}
+    copy_source_range = 'bytes={start}-{end}'.format(start=0, end=21) 
+
+    e = assert_raises(ClientError, client.upload_part_copy,Bucket=src_bucket_name, Key='dest', UploadId=upload_id, CopySource=copy_source, CopySourceRange=copy_source_range, PartNumber=1)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 416)
+    eq(error_code, 'InvalidRange')
+    
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check multipart copies with single small part')
+def test_multipart_copy_special_names():
+    src_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=src_bucket_name)
+
+    dest_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=dest_bucket_name)
+
+    dest_key = "mymultipart"
+    size = 1
+    client = get_client()
+
+    for src_key in (' ', '_', '__', '?versionId'):
+        _create_key_with_random_content(src_key, bucket_name=src_bucket_name)
+        (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+        response = client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+        response = client.get_object(Bucket=dest_bucket_name, Key=dest_key)
+        eq(size, response['ContentLength'])
+        _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+
+def _check_content_using_range(key, bucket_name, data, step):
+    client = get_client()
+    response = client.get_object(Bucket=bucket_name, Key=key)
+    size = response['ContentLength']
+
+    for ofs in xrange(0, size, step):
+        toread = size - ofs
+        if toread > step:
+            toread = step
+        end = ofs + toread - 1
+        r = 'bytes={s}-{e}'.format(s=ofs, e=end)
+        response = client.get_object(Bucket=bucket_name, Key=key, Range=r)
+        eq(response['ContentLength'], toread)
+        body = response['Body']
+        got = body.read()
+        eq(got, data[ofs:end+1])
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='complete multi-part upload')
+@attr(assertion='successful')
+#TODO: ask casey if fails_on_aws is necessary
+@attr('fails_on_aws')
+def test_multipart_upload():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    key="mymultipart"
+    content_type='text/bla'
+    objlen = 30 * 1024 * 1024
+    metadata = {'foo': 'bar'}
+    client = get_client()
+
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen, content_type=content_type, metadata=metadata)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    response = client.head_bucket(Bucket=bucket_name)
+    rgw_bytes_used = int(response['ResponseMetadata']['HTTPHeaders']['x-rgw-bytes-used'])
+    eq(rgw_bytes_used, objlen)
+
+    rgw_object_count = int(response['ResponseMetadata']['HTTPHeaders']['x-rgw-object-count'])
+    eq(rgw_object_count, 1)
+
+    response = client.get_object(Bucket=bucket_name, Key=key)
+    eq(response['ContentType'], content_type)
+    eq(response['Metadata'], metadata)
+    body = response['Body']
+    got = body.read()
+    eq(len(got), response['ContentLength'])
+    eq(got, data)
+
+    _check_content_using_range(key, bucket_name, data, 1000000)
+    _check_content_using_range(key, bucket_name, data, 10000000)
+
+def check_versioning(bucket_name, status):
+    client = get_client()
+
+    try:
+        response = client.get_bucket_versioning(Bucket=bucket_name)
+        eq(response['Status'], status)
+    except KeyError:
+        eq(status, None)
+
+# amazon is eventual consistent, retry a bit if failed
+def check_configure_versioning_retry(bucket_name, status, expected_string):
+    client = get_client()
+    client.put_bucket_versioning(Bucket=bucket_name, VersioningConfiguration={'Status': status})
+
+    read_status = None
+
+    for i in xrange(5):
+        try:
+            response = client.get_bucket_versioning(Bucket=bucket_name)
+            read_status = response['Status']
+        except KeyError:
+            read_status = None
+
+        if (expected_string == read_status):
+            break
+
+        time.sleep(1)
+
+    eq(expected_string, read_status)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check multipart copies of versioned objects')
+def test_multipart_copy_versioned():
+    src_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=src_bucket_name)
+
+    dest_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=dest_bucket_name)
+
+    dest_key = "mymultipart"
+    check_versioning(src_bucket_name, None)
+
+    src_key = 'foo'
+    check_configure_versioning_retry(src_bucket_name, "Enabled", "Enabled")
+
+    size = 15 * 1024 * 1024
+    _create_key_with_random_content(src_key, size=size, bucket_name=src_bucket_name)
+    _create_key_with_random_content(src_key, size=size, bucket_name=src_bucket_name)
+    _create_key_with_random_content(src_key, size=size, bucket_name=src_bucket_name)
+
+    version_id = []
+    client = get_client()
+    response = client.list_object_versions(Bucket=src_bucket_name)
+    for ver in response['Versions']:
+        version_id.append(ver['VersionId'])
+
+    for vid in version_id:
+        (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size, version_id=vid)
+        response = client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+        response = client.get_object(Bucket=dest_bucket_name, Key=dest_key)
+        eq(size, response['ContentLength'])
+        _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name, version_id=vid)
+
+def _check_upload_multipart_resend(bucket_name, key, objlen, resend_parts):
+    content_type = 'text/bla'
+    metadata = {'foo': 'bar'}
+    client = get_client()
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen, content_type=content_type, metadata=metadata, resend_parts=resend_parts)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    response = client.get_object(Bucket=bucket_name, Key=key)
+    eq(response['ContentType'], content_type)
+    eq(response['Metadata'], metadata)
+    body = response['Body']
+    got = body.read()
+    eq(len(got), response['ContentLength'])
+    eq(got, data)
+
+    _check_content_using_range(key, bucket_name, data, 1000000)
+    _check_content_using_range(key, bucket_name, data, 10000000)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='complete multiple multi-part upload with different sizes')
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='complete multi-part upload')
+@attr(assertion='successful')
+def test_multipart_upload_resend_part():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    key="mymultipart"
+    objlen = 30 * 1024 * 1024
+
+    _check_upload_multipart_resend(bucket_name, key, objlen, [0])
+    _check_upload_multipart_resend(bucket_name, key, objlen, [1])
+    _check_upload_multipart_resend(bucket_name, key, objlen, [2])
+    _check_upload_multipart_resend(bucket_name, key, objlen, [1,2])
+    _check_upload_multipart_resend(bucket_name, key, objlen, [0,1,2,3,4,5])
+
+@attr(assertion='successful')
+def test_multipart_upload_multiple_sizes():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    key="mymultipart"
+    client = get_client()
+
+    objlen = 5*1024*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    objlen = 5*1024*1024+100*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    objlen = 5*1024*1024+600*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    objlen = 10*1024*1024+100*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    objlen = 10*1024*1024+600*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    objlen = 10*1024*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+# Goal 5664!
