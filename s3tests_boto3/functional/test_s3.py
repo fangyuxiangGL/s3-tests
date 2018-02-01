@@ -24,6 +24,8 @@ import nose
 import os
 import string
 import random
+import socket
+import ssl
 
 from email.header import decode_header
 
@@ -34,6 +36,7 @@ from . import (
     get_client,
     get_prefix,
     get_anon_client,
+    get_secure_client,
     get_bad_auth_client,
     get_anon_resource,
     get_new_bucket,
@@ -1319,7 +1322,7 @@ def test_object_write_file():
 
 def _get_post_url(bucket_name):
     is_secure = get_config_is_secure()
-    if is_secure == True:
+    if(is_secure):
         protocol='https'
     else:
         protocol='http'
@@ -5134,47 +5137,6 @@ def test_bucket_list_special_prefix():
     objs_list = get_objects_list(bucket_name, prefix='_bla/')
     eq(len(objs_list), 4)
 
-class FakeFile(object):
-    """
-    file that simulates seek, tell, and current character
-    """
-    def __init__(self, char='A', interrupt=None):
-        self.offset = 0
-        self.char = char
-        self.interrupt = interrupt
-
-    def seek(self, offset, whence=os.SEEK_SET):
-        if whence == os.SEEK_SET:
-            self.offset = offset
-        elif whence == os.SEEK_END:
-            self.offset = self.size + offset;
-        elif whence == os.SEEK_CUR:
-            self.offset += offset
-
-    def tell(self):
-        return self.offset
-
-class FakeWriteFile(FakeFile):
-    """
-    file that simulates interruptable reads of constant data
-    """
-    def __init__(self, size, char='A', interrupt=None):
-        FakeFile.__init__(self, char, interrupt)
-        self.size = size
-
-    def read(self, size=-1):
-        if size < 0:
-            size = self.size - self.offset
-        count = min(size, self.size - self.offset)
-        self.offset += count
-
-        # Sneaky! do stuff before we return (the last time)
-        if self.interrupt != None and self.offset == self.size and count > 0:
-            self.interrupt()
-
-        return self.char*count
-
-
 @attr(resource='object')
 @attr(method='put')
 @attr(operation='copy zero sized object in same bucket')
@@ -5777,6 +5739,34 @@ def test_multipart_copy_invalid_range():
     
 @attr(resource='object')
 @attr(method='put')
+@attr(operation='check multipart copies without x-amz-copy-source-range')
+def test_multipart_copy_without_range():
+    client = get_client()
+    src_key = 'source'
+    src_bucket_name = _create_key_with_random_content(src_key, size=10)
+    dest_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=dest_bucket_name)
+    dest_key = "mymultipartcopy"
+
+    response = client.create_multipart_upload(Bucket=dest_bucket_name, Key=dest_key)
+    upload_id = response['UploadId']
+    parts = []
+
+    copy_source = {'Bucket': src_bucket_name, 'Key': src_key}
+    part_num = 1
+    copy_source_range = 'bytes={start}-{end}'.format(start=0, end=9) 
+
+    response = client.upload_part_copy(Bucket=dest_bucket_name, Key=dest_key, CopySource=copy_source, PartNumber=part_num, UploadId=upload_id)
+
+    parts.append({'ETag': response['CopyPartResult'][u'ETag'], 'PartNumber': part_num})
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    response = client.get_object(Bucket=dest_bucket_name, Key=dest_key)
+    eq(response['ContentLength'], 10)
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+    
+@attr(resource='object')
+@attr(method='put')
 @attr(operation='check multipart copies with single small part')
 def test_multipart_copy_special_names():
     src_bucket_name = get_new_bucket_name()
@@ -5981,5 +5971,590 @@ def test_multipart_upload_multiple_sizes():
     objlen = 10*1024*1024
     (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
     client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    
+@attr(assertion='successful')
+@attr('fails_on_rgw')
+def test_multipart_copy_multiple_sizes():
+    src_key = 'foo'
+    src_bucket_name = _create_key_with_random_content(src_key, 12*1024*1024)
 
-# Goal 5664!
+    dest_bucket_name = get_new_bucket_name()
+    get_new_bucket(name=dest_bucket_name)
+    dest_key="mymultipart"
+    client = get_client()
+
+    size = 5*1024*1024
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+    
+    size = 5*1024*1024+100*1024
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+    
+    size = 5*1024*1024+600*1024
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+    
+    size = 10*1024*1024+100*1024
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+    
+    size = 10*1024*1024+600*1024
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+    
+    size = 10*1024*1024
+    (upload_id, parts) = _multipart_copy(src_bucket_name, src_key, dest_bucket_name, dest_key, size)
+    client.complete_multipart_upload(Bucket=dest_bucket_name, Key=dest_key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    _check_key_content(src_key, src_bucket_name, dest_key, dest_bucket_name)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check failure on multiple multi-part upload with size too small')
+@attr(assertion='fails 400')
+def test_multipart_upload_size_too_small():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    key="mymultipart"
+    client = get_client()
+
+    size = 100*1024
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=size, part_size=10*1024)
+    e = assert_raises(ClientError, client.complete_multipart_upload, Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'EntityTooSmall')
+
+def gen_rand_string(size, chars=string.ascii_uppercase + string.digits):
+    return ''.join(random.choice(chars) for _ in range(size))
+
+def _do_test_multipart_upload_contents(bucket_name, key, num_parts):
+    payload=gen_rand_string(5)*1024*1024
+    client = get_client()
+        
+    response = client.create_multipart_upload(Bucket=bucket_name, Key=key)
+    upload_id = response['UploadId']
+
+    parts = []
+
+    for part_num in range(0, num_parts):
+        part = StringIO(payload)
+        response = client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=part_num+1, Body=part)
+        parts.append({'ETag': response['ETag'].strip('"'), 'PartNumber': part_num+1})
+
+    last_payload = '123'*1024*1024
+    last_part = StringIO(last_payload)
+    response = client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=num_parts+1, Body=last_part)
+    parts.append({'ETag': response['ETag'].strip('"'), 'PartNumber': num_parts+1})
+
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    response = client.get_object(Bucket=bucket_name, Key=key)
+    body = response['Body']
+    test_string = body.read()
+
+    all_payload = payload*num_parts + last_payload
+
+    assert test_string == all_payload
+
+    return all_payload
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='check contents of multi-part upload')
+@attr(assertion='successful')
+def test_multipart_upload_contents():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    _do_test_multipart_upload_contents(bucket_name, 'mymultipart', 3)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation=' multi-part upload overwrites existing key')
+@attr(assertion='successful')
+def test_multipart_upload_overwrite_existing_object():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    key = 'mymultipart'
+    payload='12345'*1024*1024
+    num_parts=2
+    client.put_object(Bucket=bucket_name, Key=key, Body=payload)
+
+        
+    response = client.create_multipart_upload(Bucket=bucket_name, Key=key)
+    upload_id = response['UploadId']
+
+    parts = []
+
+    for part_num in range(0, num_parts):
+        response = client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=part_num+1, Body=payload)
+        parts.append({'ETag': response['ETag'].strip('"'), 'PartNumber': part_num+1})
+
+    client.complete_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+
+    response = client.get_object(Bucket=bucket_name, Key=key)
+    body = response['Body']
+    test_string = body.read()
+
+    assert test_string == payload*num_parts
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='abort multi-part upload')
+@attr(assertion='successful')
+def test_abort_multipart_upload():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    key="mymultipart"
+    objlen = 10 * 1024 * 1024
+    client = get_client()
+
+    (upload_id, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=objlen)
+    client.abort_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id)
+
+    response = client.head_bucket(Bucket=bucket_name)
+    rgw_bytes_used = int(response['ResponseMetadata']['HTTPHeaders']['x-rgw-bytes-used'])
+    eq(rgw_bytes_used, 0)
+
+    rgw_object_count = int(response['ResponseMetadata']['HTTPHeaders']['x-rgw-object-count'])
+    eq(rgw_object_count, 0)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='abort non-existent multi-part upload')
+@attr(assertion='fails 404')
+def test_abort_multipart_upload_not_found():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    key="mymultipart"
+    client.put_object(Bucket=bucket_name, Key=key)
+
+    e = assert_raises(ClientError, client.abort_multipart_upload, Bucket=bucket_name, Key=key, UploadId='56788')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+    eq(error_code, 'NoSuchUpload')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='concurrent multi-part uploads')
+@attr(assertion='successful')
+def test_list_multipart_upload():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    key="mymultipart"
+    mb = 1024 * 1024
+
+    upload_ids = []
+    (upload_id1, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=5*mb)
+    upload_ids.append(upload_id1)
+    (upload_id2, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key, size=6*mb)
+    upload_ids.append(upload_id2)
+
+    key2="mymultipart2"
+    (upload_id3, data, parts) = _multipart_upload(bucket_name=bucket_name, key=key2, size=5*mb)
+    upload_ids.append(upload_id3)
+
+    response = client.list_multipart_uploads(Bucket=bucket_name)
+    uploads = response['Uploads']
+
+    for i in range(0, len(uploads)):
+        eq(upload_ids[i], uploads[i]['UploadId'])
+
+    client.abort_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id1)
+    client.abort_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id2)
+    client.abort_multipart_upload(Bucket=bucket_name, Key=key2, UploadId=upload_id3)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='multi-part upload with missing part')
+def test_multipart_upload_missing_part():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    key="mymultipart"
+    size = 1
+
+    response = client.create_multipart_upload(Bucket=bucket_name, Key=key)
+    upload_id = response['UploadId']
+
+    parts = []
+    response = client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=1, Body=StringIO('\x00'))
+    # 'PartNumber should be 1'
+    parts.append({'ETag': response['ETag'].strip('"'), 'PartNumber': 9999})
+
+    e = assert_raises(ClientError, client.complete_multipart_upload, Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'InvalidPart')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='multi-part upload with incorrect ETag')
+def test_multipart_upload_incorrect_etag():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    key="mymultipart"
+    size = 1
+
+    response = client.create_multipart_upload(Bucket=bucket_name, Key=key)
+    upload_id = response['UploadId']
+
+    parts = []
+    response = client.upload_part(UploadId=upload_id, Bucket=bucket_name, Key=key, PartNumber=1, Body=StringIO('\x00'))
+    # 'ETag' should be "93b885adfe0da089cdf634904fd59f71"
+    parts.append({'ETag': "ffffffffffffffffffffffffffffffff", 'PartNumber': 1})
+
+    e = assert_raises(ClientError, client.complete_multipart_upload, Bucket=bucket_name, Key=key, UploadId=upload_id, MultipartUpload={'Parts': parts})
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 400)
+    eq(error_code, 'InvalidPart')
+
+def _simple_http_req_100_cont(host, port, is_secure, method, resource):
+    """
+    Send the specified request w/expect 100-continue
+    and await confirmation.
+    """
+    req = '{method} {resource} HTTP/1.1\r\nHost: {host}\r\nAccept-Encoding: identity\r\nContent-Length: 123\r\nExpect: 100-continue\r\n\r\n'.format(
+            method=method,
+            resource=resource,
+            host=host,
+            )
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print is_secure
+    if(is_secure):
+        print "Made it here"
+        s = ssl.wrap_socket(s);
+    s.settimeout(5)
+    s.connect((host, port))
+    s.send(req)
+
+    try:
+        data = s.recv(1024)
+    except socket.error, msg:
+        print 'got response: ', msg
+        print 'most likely server doesn\'t support 100-continue'
+
+    s.close()
+    l = data.split(' ')
+
+    assert l[0].startswith('HTTP')
+
+    return l[1]
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='w/expect continue')
+@attr(assertion='succeeds if object is public-read-write')
+@attr('100_continue')
+@attr('fails_on_mod_proxy_fcgi')
+def test_100_continue():
+    bucket_name = get_new_bucket_name()
+    #client = get_secure_client()
+    client = get_client()
+    client.create_bucket(Bucket=bucket_name)
+    objname='testobj'
+    resource = '/{bucket}/{obj}'.format(bucket=bucket_name, obj=objname)
+
+    host = get_config_host()
+    port = get_config_port()
+    is_secure = get_config_is_secure()
+    print is_secure
+
+    #TODO: figure out what the wrong version number is
+    status = _simple_http_req_100_cont(host, port, is_secure, 'PUT', resource)
+    eq(status, '403')
+
+    client.put_bucket_acl(Bucket=bucket_name, ACL='public-read-write')
+
+    status = _simple_http_req_100_cont(host, port, is_secure, 'PUT', resource)
+    eq(status, '100')
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='set cors')
+@attr(assertion='succeeds')
+def test_set_cors():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    allowed_methods = ['GET', 'PUT']
+    allowed_origins = ['*.get', '*.put']
+
+    cors_config ={
+        'CORSRules': [
+            {'AllowedMethods': allowed_methods, 
+             'AllowedOrigins': allowed_origins,
+            },
+        ]
+    }
+
+    e = assert_raises(ClientError, client.get_bucket_cors, Bucket=bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+
+    client.put_bucket_cors(Bucket=bucket_name, CORSConfiguration=cors_config)
+    response = client.get_bucket_cors(Bucket=bucket_name)
+    eq(response['CORSRules'][0]['AllowedMethods'], allowed_methods)
+    eq(response['CORSRules'][0]['AllowedOrigins'], allowed_origins)
+
+    client.delete_bucket_cors(Bucket=bucket_name)
+    e = assert_raises(ClientError, client.get_bucket_cors, Bucket=bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+
+def _cors_request_and_check(func, url, headers, expect_status, expect_allow_origin, expect_allow_methods):
+    r = func(url, headers=headers)
+    eq(r.status_code, expect_status)
+
+    assert r.headers['access-control-allow-origin'] == expect_allow_origin
+    assert r.headers['access-control-allow-methods'] == expect_allow_methods
+
+    
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='check cors response when origin header set')
+@attr(assertion='returning cors header')
+def test_cors_origin_response():
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+    allowed_methods = ['GET', 'PUT']
+    allowed_origins = ['*.get', '*.put']
+
+    cors_config ={
+        'CORSRules': [
+            {'AllowedMethods': 'GET', 
+             'AllowedOrigins': '*suffix',
+            },
+            {'AllowedMethods': 'GET', 
+             'AllowedOrigins': 'start*end',
+            },
+            {'AllowedMethods': 'GET', 
+             'AllowedOrigins': 'prefix*',
+            },
+            {'AllowedMethods': 'PUT', 
+             'AllowedOrigins': '*.put',
+            },
+        ]
+    }
+
+    allowed_methods = ['GET', 'PUT']
+    allowed_origins = ['*.suffix', 'start*end', 'prefix*', '*.put']
+
+    cors_config ={
+        'CORSRules': [
+            {'AllowedMethods': allowed_methods, 
+             'AllowedOrigins': allowed_origins,
+            },
+        ]
+    }
+
+
+    e = assert_raises(ClientError, client.get_bucket_cors, Bucket=bucket_name)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 404)
+
+    client.put_bucket_cors(Bucket=bucket_name, CORSConfiguration=cors_config)
+
+    time.sleep(3) # waiting, since if running against amazon data consistency model is not strict read-after-write
+
+    url = _get_post_url(bucket_name)
+    print url
+
+    _cors_request_and_check(requests.get, url, None, 200, None, None)
+    _cors_request_and_check(requests.get, url, {'Origin': 'foo.suffix'}, 200, 'foo.suffix', 'GET')
+    _cors_request_and_check(requests.get, url, {'Origin': 'foo.bar'}, 200, None, None)
+    _cors_request_and_check(requests.get, url, {'Origin': 'foo.suffix.get'}, 200, None, None)
+    _cors_request_and_check(requests.get, url, {'Origin': 'startend'}, 200, 'startend', 'GET')
+    _cors_request_and_check(requests.get, url, {'Origin': 'start1end'}, 200, 'start1end', 'GET')
+    _cors_request_and_check(requests.get, url, {'Origin': 'start12end'}, 200, 'start12end', 'GET')
+    _cors_request_and_check(requests.get, url, {'Origin': '0start12end'}, 200, None, None)
+    _cors_request_and_check(requests.get, url, {'Origin': 'prefix'}, 200, 'prefix', 'GET')
+    _cors_request_and_check(requests.get, url, {'Origin': 'prefix.suffix'}, 200, 'prefix.suffix', 'GET')
+    _cors_request_and_check(requests.get, url, {'Origin': 'bla.prefix'}, 200, None, None)
+
+    obj_url = '{u}/{o}'.format(u=url, o='bar')
+    _cors_request_and_check(requests.get, obj_url, {'Origin': 'foo.suffix'}, 404, 'foo.suffix', 'GET')
+    _cors_request_and_check(requests.put, obj_url, {'Origin': 'foo.suffix', 'Access-Control-Request-Method': 'GET',
+                                                    'content-length': '0'}, 403, 'foo.suffix', 'GET')
+    _cors_request_and_check(requests.put, obj_url, {'Origin': 'foo.suffix', 'Access-Control-Request-Method': 'PUT',
+                                                    'content-length': '0'}, 403, None, None)
+    _cors_request_and_check(requests.put, obj_url, {'Origin': 'foo.suffix', 'Access-Control-Request-Method': 'DELETE',
+                                                    'content-length': '0'}, 403, None, None)
+    _cors_request_and_check(requests.put, obj_url, {'Origin': 'foo.suffix', 'content-length': '0'}, 403, None, None)
+
+    _cors_request_and_check(requests.put, obj_url, {'Origin': 'foo.put', 'content-length': '0'}, 403, 'foo.put', 'PUT')
+
+    _cors_request_and_check(requests.get, obj_url, {'Origin': 'foo.suffix'}, 404, 'foo.suffix', 'GET')
+
+    _cors_request_and_check(requests.options, url, None, 400, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'foo.suffix'}, 400, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'bla'}, 400, None, None)
+    _cors_request_and_check(requests.options, obj_url, {'Origin': 'foo.suffix', 'Access-Control-Request-Method': 'GET',
+                                                    'content-length': '0'}, 200, 'foo.suffix', 'GET')
+    _cors_request_and_check(requests.options, url, {'Origin': 'foo.bar', 'Access-Control-Request-Method': 'GET'}, 403, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'foo.suffix.get', 'Access-Control-Request-Method': 'GET'}, 403, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'startend', 'Access-Control-Request-Method': 'GET'}, 200, 'startend', 'GET')
+    _cors_request_and_check(requests.options, url, {'Origin': 'start1end', 'Access-Control-Request-Method': 'GET'}, 200, 'start1end', 'GET')
+    _cors_request_and_check(requests.options, url, {'Origin': 'start12end', 'Access-Control-Request-Method': 'GET'}, 200, 'start12end', 'GET')
+    _cors_request_and_check(requests.options, url, {'Origin': '0start12end', 'Access-Control-Request-Method': 'GET'}, 403, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'prefix', 'Access-Control-Request-Method': 'GET'}, 200, 'prefix', 'GET')
+    _cors_request_and_check(requests.options, url, {'Origin': 'prefix.suffix', 'Access-Control-Request-Method': 'GET'}, 200, 'prefix.suffix', 'GET')
+    _cors_request_and_check(requests.options, url, {'Origin': 'bla.prefix', 'Access-Control-Request-Method': 'GET'}, 403, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'foo.put', 'Access-Control-Request-Method': 'GET'}, 403, None, None)
+    _cors_request_and_check(requests.options, url, {'Origin': 'foo.put', 'Access-Control-Request-Method': 'PUT'}, 200, 'foo.put', 'PUT')
+
+
+class FakeFile(object):
+    """
+    file that simulates seek, tell, and current character
+    """
+    def __init__(self, char='A', interrupt=None):
+        self.offset = 0
+        self.char = char
+        self.interrupt = interrupt
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        if whence == os.SEEK_SET:
+            self.offset = offset
+        elif whence == os.SEEK_END:
+            self.offset = self.size + offset;
+        elif whence == os.SEEK_CUR:
+            self.offset += offset
+
+    def tell(self):
+        return self.offset
+
+class FakeWriteFile(FakeFile):
+    """
+    file that simulates interruptable reads of constant data
+    """
+    def __init__(self, size, char='A', interrupt=None):
+        FakeFile.__init__(self, char, interrupt)
+        self.size = size
+
+    def read(self, size=-1):
+        if size < 0:
+            size = self.size - self.offset
+        count = min(size, self.size - self.offset)
+        self.offset += count
+
+        # Sneaky! do stuff before we return (the last time)
+        if self.interrupt != None and self.offset == self.size and count > 0:
+            self.interrupt()
+
+        return self.char*count
+
+class FakeReadFile(FakeFile):
+    """
+    file that simulates writes, interrupting after the second
+    """
+    def __init__(self, size, char='A', interrupt=None):
+        FakeFile.__init__(self, char, interrupt)
+        self.interrupted = False
+        self.size = 0
+        self.expected_size = size
+
+    def write(self, chars):
+        eq(chars, self.char*len(chars))
+        self.offset += len(chars)
+        self.size += len(chars)
+
+        # Sneaky! do stuff on the second seek
+        if not self.interrupted and self.interrupt != None \
+                and self.offset > 0:
+            self.interrupt()
+            self.interrupted = True
+
+    def close(self):
+        eq(self.size, self.expected_size)
+
+class FakeFileVerifier(object):
+    """
+    file that verifies expected data has been written
+    """
+    def __init__(self, char=None):
+        self.char = char
+        self.size = 0
+
+    def write(self, data):
+        size = len(data)
+        if self.char == None:
+            self.char = data[0]
+        self.size += size
+        eq(data, self.char*size)
+
+def _verify_atomic_key_data(bucket_name, key, size=-1, char=None):
+    """
+    Make sure file is of the expected size and (simulated) content
+    """
+    client = get_client()
+    #fp_verify = FakeFileVerifier(char)
+    response = client.get_object(Bucket=bucket_name, Key=key)
+    #key.get_contents_to_file(fp_verify)
+    if size >= 0:
+        eq(response['ContentLength'], size)
+
+def _test_atomic_read(file_size):
+    """
+    Create a file of A's, use it to set_contents_from_file.
+    Create a file of B's, use it to re-set_contents_from_file.
+    Re-read the contents, and confirm we get B's
+    """
+    bucket_name = get_new_bucket_name()
+    get_new_bucket(name=bucket_name)
+    client = get_client()
+
+    # create object of <file_size> As
+    fp_a = FakeWriteFile(file_size, 'A')
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=fp_a)
+
+    client2 = get_client()
+
+    fp_b = FakeWriteFile(file_size, 'B')
+    #fp_a2 = FakeReadFile(file_size, 'A',
+    #    lambda: client2.put_object(Bucket=bucket_name, Key='testobj', Body=fp_b)
+    #    )
+    client2.put_object(Bucket=bucket_name, Key='testobj', Body=fp_b)
+
+    # read object while writing it to it
+    client2.get_object(Bucket=bucket_name, Key='testobj')
+    #fp_a2.close()
+
+    _verify_atomic_key_data(bucket_name, 'testobj', file_size, 'B')
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='read atomicity')
+@attr(assertion='1MB successful')
+def test_atomic_read_1mb():
+    _test_atomic_read(1024*1024)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='read atomicity')
+@attr(assertion='4MB successful')
+def test_atomic_read_4mb():
+    _test_atomic_read(1024*1024*4)
+
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='read atomicity')
+@attr(assertion='8MB successful')
+def test_atomic_read_8mb():
+    _test_atomic_read(1024*1024*8)
+
+
+    
+# Goal 6605

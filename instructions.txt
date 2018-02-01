@@ -1,0 +1,31 @@
+# For Boto2
+1. run bootstrap
+2. copy config settings from README NOT the config.yaml.sample, change the settings for localhost and port and some others
+3. run `export S3_USE_SIGV4` to be able to run aws4 tests
+4. run S3TEST_CONF=config.yaml ./virtualenv/bin/nosetests -v s3tests.functional.test_headers:test_object_create_bad_md5_invalid_garbage_aws4 to run an individual test
+
+# For Boto3
+1. run bootstrap
+2. (from the s3tests base directory) S3TEST_CONF=config_boto3.yaml ./virtualenv/bin/nosetests -v -s s3tests_boto3.functional.test_s3:test_multipart_copy_without_range
+
+
+Library definitions:
+boto - older version of boto
+botocore - low level interface for a number of AWS services
+boto3 - replaces both boto and botocore
+
+Notes:
+to enable logging in any boto3 test add before the lines you want:
+boto3.set_stream_logger(name='botocore')
+
+in boto2 tests add:
+
+boto.set_stream_logger('boto')
+
+to any line
+
+
+
+
+
+
