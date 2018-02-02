@@ -36,7 +36,6 @@ from . import (
     get_client,
     get_prefix,
     get_anon_client,
-    get_secure_client,
     get_bad_auth_client,
     get_anon_resource,
     get_new_bucket,
